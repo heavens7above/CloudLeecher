@@ -68,5 +68,5 @@ node_modules/
 # dataconnect generated files
 .dataconnect
 
-correction1.txt
-correction.txt
+.correction1.txt
+.correction.txt
