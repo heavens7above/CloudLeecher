@@ -70,3 +70,5 @@ node_modules/
 
 .correction1.txt
 .correction.txt
+
+.gitignore
