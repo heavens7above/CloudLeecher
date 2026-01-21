@@ -10,7 +10,7 @@
 [![GitHub Forks](https://img.shields.io/github/forks/heavens7above/CloudLeecher?style=social)](https://github.com/heavens7above/CloudLeecher/network/members)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-[🚀 **Launch CloudLeecher**](https://cloudleecher.web.app/) • [📓 **Open Colab Notebook**](https://colab.research.google.com/drive/1j-L-CXE-ObYWZ-_qGv0uNlpRsS3HPQSE?usp=sharing) • [📖 **Documentation**](#documentation)
+[🚀 **Launch CloudLeecher**](https://cloudleecher.web.app/) • [📓 **Open Colab Notebook**](https://colab.research.google.com/drive/1j-L-CXE-ObYWZ-_qGv0uNlpRsS3HPQSE?usp=sharing) • [📖 **Documentation**](https://github.com/heavens7above/CloudLeecher/blob/main/README.md)
 
 </div>
 
@@ -61,7 +61,7 @@ CloudLeecher solves these problems by moving the entire process to the cloud, le
 
 2. **Open the Colab Notebook**
    
-   Click the "Open Colab Notebook" button or visit the [direct link](https://colab.research.google.com/drive/1j-L-CXE-ObYWZ-_qGv0uNlpRsS3HPQSE?usp=sharing).
+   Click the "Open Colab Notebook" button or visit the [Direct Link](https://colab.research.google.com/drive/1j-L-CXE-ObYWZ-_qGv0uNlpRsS3HPQSE?usp=sharing).
 
 3. **Connect to Runtime**
    
@@ -88,7 +88,7 @@ CloudLeecher/
 │   └── package.json         # Frontend dependencies
 │
 ├── CloudLeecher.ipynb       # Main Google Colab notebook
-├── README.md                # This file
+├── README.md                # README.md
 ├── .gitignore              # Git ignore rules
 └── LICENSE                 # License information
 ```
@@ -292,9 +292,9 @@ Always respect copyright laws and content creators' rights. Only download conten
 
 <div align="center">
 
-**Made with ❤️ by the CloudLeecher Team**
+**If you find this project useful, consider giving it a ⭐!**
 
-If you find this project useful, consider giving it a ⭐!
+PEACE OUT
 
 [⬆ Back to Top](#cloudleecher)
 
