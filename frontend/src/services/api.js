@@ -50,6 +50,14 @@ export const TorrentAPI = {
 
     getDriveInfo: async () => {
         return api.get('/api/drive/info');
+    },
+
+    getLogs: async () => {
+        return api.get('/api/logs');
+    },
+
+    cleanupAll: async () => {
+        return api.post('/api/cleanup');
     }
 };
 

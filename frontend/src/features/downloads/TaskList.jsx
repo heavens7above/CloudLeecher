@@ -1,9 +1,9 @@
 import React from 'react';
 import { Play, Pause, Trash2, File, CheckCircle, AlertCircle, Clock, Download } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { Card, CardContent } from '../ui/Card';
-import { Button } from '../ui/Button';
-import { Progress } from '../ui/Progress';
+import { Card, CardContent } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
+import { Progress } from '../../components/ui/Progress';
 
 export function TaskList() {
     const { tasks, clearHistory } = useApp();
@@ -39,6 +39,43 @@ export function TaskList() {
                     <TaskCard key={task.gid} task={task} />
                 ))}
             </div>
+        </div>
+    );
+}
+
+function DebugPanel({ visibleTasks }) {
+    const { lastUpdated, tasks, backendGids } = useApp();
+    const [isOpen, setIsOpen] = React.useState(false);
+
+    return (
+        <div className="mt-8 border-t border-white/10 pt-4">
+            <button
+                onClick={() => setIsOpen(!isOpen)}
+                className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-2"
+            >
+                {isOpen ? 'Hide Debug Info' : 'Show Debug Info'}
+            </button>
+
+            {isOpen && (
+                <div className="mt-4 p-4 bg-black/50 rounded text-xs font-mono text-gray-400 overflow-x-auto space-y-2">
+                    <p>Last Updated: {lastUpdated ? lastUpdated.toLocaleTimeString() : 'Never'}</p>
+                    <p>Total Local Tasks: {tasks.length}</p>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <strong className="text-white">Local GIDs:</strong>
+                            <pre className="mt-1 text-emerald-400">
+                                {JSON.stringify(tasks.map(t => ({ gid: t.gid, status: t.status })), null, 2)}
+                            </pre>
+                        </div>
+                        <div>
+                            <strong className="text-white">Backend GIDs:</strong>
+                            <pre className="mt-1 text-blue-400">
+                                {JSON.stringify(backendGids, null, 2)}
+                            </pre>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -102,6 +139,16 @@ function TaskCard({ task }) {
                                 : 'Fetching metadata...'}
                         </span>
                         {task.speed > 0 && <span>{formatSpeed(task.speed)}</span>}
+                        {(task.seeds > 0 || task.peers > 0) && (
+                            <span className="text-gray-500 ml-2">
+                                Seeds: {task.seeds} | Peers: {task.peers}
+                            </span>
+                        )}
+                        {task.errorMessage && (
+                            <div className="text-red-400 text-xs mt-1 w-full break-all">
+                                Error: {task.errorMessage}
+                            </div>
+                        )}
                     </div>
 
                     <Progress value={task.progress} />

@@ -2,9 +2,9 @@ import React, { useState, useCallback } from 'react';
 import { Magnet, Upload, Link, Loader2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useToast } from '../../context/ToastContext';
-import { Card, CardContent } from '../ui/Card';
-import { Button } from '../ui/Button';
-import { Input } from '../ui/Input';
+import { Card, CardContent } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
+import { Input } from '../../components/ui/Input';
 
 export function TorrentInput() {
     const { addMagnet, addTorrentFile, isConnected } = useApp();
@@ -21,9 +21,12 @@ export function TorrentInput() {
 
         setLoading(true);
         try {
-            await addMagnet(link);
-            setLink('');
-            addToast('Magnet link added', 'success');
+            const result = await addMagnet(link);
+            if (result) {
+                setLink('');
+                addToast('Magnet link added to download queue', 'success');
+            }
+            // If result is null, addMagnet already showed queue warning
         } catch (err) {
             console.error(err);
             addToast('Failed to add magnet link', 'error');
@@ -44,9 +47,12 @@ export function TorrentInput() {
         reader.onload = async (event) => {
             try {
                 const base64Content = event.target.result.split(',')[1];
-                await addTorrentFile(base64Content);
-                addToast(`Added torrent file: ${file.name}`, 'success');
-                setActiveTab('magnet');
+                const result = await addTorrentFile(base64Content);
+                if (result) {
+                    addToast(`Added torrent file: ${file.name}`, 'success');
+                    setActiveTab('magnet');
+                }
+                // If result is null, addTorrentFile already showed queue warning
             } catch (err) {
                 console.error('Torrent upload error:', err);
                 const msg = err.response?.data?.error || err.message;

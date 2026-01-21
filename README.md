@@ -8,7 +8,7 @@
 
 [![GitHub Stars](https://img.shields.io/github/stars/heavens7above/CloudLeecher?style=social)](https://github.com/heavens7above/CloudLeecher/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/heavens7above/CloudLeecher?style=social)](https://github.com/heavens7above/CloudLeecher/network/members)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/heavens7above/CloudLeecher/blob/main/LICENSE)
 
 [🚀 **Launch CloudLeecher**](https://cloudleecher.web.app/) • [📓 **Open Colab Notebook**](https://colab.research.google.com/drive/1j-L-CXE-ObYWZ-_qGv0uNlpRsS3HPQSE?usp=sharing) • [📖 **Documentation**](https://github.com/heavens7above/CloudLeecher/blob/main/README.md)
 

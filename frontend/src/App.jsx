@@ -2,8 +2,9 @@ import React from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { ToastProvider } from './context/ToastContext';
 import { Header } from './components/layout/Header';
-import { TorrentInput } from './components/features/TorrentInput';
-import { TaskList } from './components/features/TaskList';
+import { TorrentInput } from './features/downloads/TorrentInput';
+import { TaskList } from './features/downloads/TaskList';
+import { BackendLogs } from './features/logs/BackendLogs';
 
 function CloudLeecherApp() {
   const { apiUrl, isConnected } = useApp();
@@ -37,6 +38,7 @@ function CloudLeecherApp() {
               </div>
             )}
             <TaskList />
+            <BackendLogs />
           </div>
         )}
       </main>

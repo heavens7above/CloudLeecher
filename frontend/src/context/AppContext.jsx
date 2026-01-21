@@ -14,6 +14,7 @@ export function AppProvider({ children }) {
     const [isConnected, setIsConnected] = useState(false);
     const [driveInfo, setDriveInfo] = useState({ total: 0, free: 0, used: 0 });
     const [lastUpdated, setLastUpdated] = useState(null);
+    const [logs, setLogs] = useState([]);
 
     // --- Refs for Locks & Ghost Prevention ---
     const interactionInProgress = useRef(false); // Lock for connection attempts
@@ -91,9 +92,10 @@ export function AppProvider({ children }) {
     };
 
     const refreshStatus = async () => {
-        const [statusRes, driveRes] = await Promise.all([
+        const [statusRes, driveRes, logsRes] = await Promise.all([
             TorrentAPI.getStatus(),
-            TorrentAPI.getDriveInfo()
+            TorrentAPI.getDriveInfo(),
+            TorrentAPI.getLogs().catch(() => ({ data: { logs: [] } })) // Graceful fallback
         ]);
 
         // Validate and Parse Drive Info Safely
@@ -103,20 +105,31 @@ export function AppProvider({ children }) {
             used: parseInt(driveRes.data?.used) || 0
         };
         setDriveInfo(safeDriveInfo);
+        setLogs(logsRes.data?.logs || []);
         setLastUpdated(new Date());
 
         updateTasksFromBackend(statusRes.data);
     };
 
+    const [backendGids, setBackendGids] = useState({ active: [], waiting: [], stopped: [] });
+
     const updateTasksFromBackend = (backendData) => {
         // DEBUG: See what the backend is actually sending
-        // console.log("CloudLeecher Backend Response:", backendData); 
-
         const { active, waiting, stopped } = backendData;
+
+        // Expose debug info
+        setBackendGids({
+            active: active.map(t => t.gid),
+            waiting: waiting.map(t => t.gid),
+            stopped: stopped.map(t => t.gid)
+        });
 
         // Create a map of all backend tasks for quick lookup
         const backendTasksMap = new Map();
         [...active, ...waiting, ...stopped].forEach(t => backendTasksMap.set(t.gid, t));
+
+        // DEBUG: Log all backend GIDs to help diagnose "Lost" tasks
+        console.log("Backend GIDs:", [...backendTasksMap.keys()]);
 
         // CLEANUP: Remove IDs from ignored list if they are truly gone from backend
         // This keeps our blacklist small
@@ -166,31 +179,77 @@ export function AppProvider({ children }) {
                         speed: parseInt(backendTask.downloadSpeed) || 0,
                         status: newStatus,
                         progress: (parseInt(backendTask.completedLength) / parseInt(backendTask.totalLength)) * 100 || 0,
+                        errorMessage: backendTask.errorMessage || null,
+                        errorCode: backendTask.errorCode || null,
+                        seeds: parseInt(backendTask.numSeeders) || 0,
+                        peers: parseInt(backendTask.connections) || 0,
+                        infoHash: backendTask.infoHash || null,
                         timestamp: new Date().toISOString()
                     };
                     backendTasksMap.delete(localTask.gid);
                 } else {
-                    // Task MISSING from backend
-                    // Check Grace Period: If task was added < 60 seconds ago, KEEP IT
-                    // This handles latency between adding task and backend reporting it.
-                    // Increased to 60s to handle slow Colab/Backend sync.
-                    const taskTime = new Date(localTask.timestamp || 0).getTime();
-                    const now = new Date().getTime();
-                    const isYoung = (now - taskTime) < 60000; // 60 seconds grace
+                    // Task MISSING from backend - Check for GID CHANGE first!
+                    // Aria2 sometimes creates a new GID when transitioning from metadata to actual download
+                    // Look for tasks with matching info that might have a new GID
 
-                    if (isYoung && localTask.status === 'active') {
-                        // Keep it as is (don't remove)
-                        // Maybe update status to 'initializing' to let user know?
-                        // For now, keep as 'active' (Resolving metadata...)
-                    } else if (localTask.status !== 'removed') {
-                        // Mark as ERROR if it's old and missing, so we can see it failed
-                        console.warn(`Task ${localTask.gid} missing from backend response. Marking as error.`);
+                    let foundFollowUpTask = null;
+
+                    // Strategy 1: Check all backend tasks for one that "followed" our GID
+                    for (const [newGid, bTask] of backendTasksMap.entries()) {
+                        // Check if this backend task has our old GID in its history/metadata
+                        // Unfortunately aria2 doesn't always provide backward references,
+                        // so we use heuristics: same name, similar size, within time window
+                        const sameName = bTask.files?.[0]?.path?.split('/').pop() === localTask.name;
+                        const sameInfoHash = bTask.infoHash && bTask.infoHash === localTask.infoHash;
+                        const gidPrefix = newGid.startsWith(localTask.gid); // New GID often extends the old one
+
+                        if (gidPrefix || sameInfoHash || (sameName && localTask.name !== 'Uploading torrent file...' && localTask.name !== 'Resolving metadata...')) {
+                            console.log(`🔄 GID TRANSITION DETECTED: ${localTask.gid} → ${newGid} (${localTask.name})`);
+                            foundFollowUpTask = { newGid, bTask };
+                            break;
+                        }
+                    }
+
+                    if (foundFollowUpTask) {
+                        // GID CHANGED - Update the task with new GID and latest info
+                        const { newGid, bTask } = foundFollowUpTask;
                         newTasks[i] = {
                             ...localTask,
-                            status: 'error',
-                            name: localTask.name.startsWith('[Lost]') ? localTask.name : `[Lost] ${localTask.name}`,
-                            speed: 0
+                            gid: newGid, // CRITICAL: Update to new GID
+                            name: bTask.files?.[0]?.path?.split('/').pop() || localTask.name,
+                            size: parseInt(bTask.totalLength) || 0,
+                            completed: parseInt(bTask.completedLength) || 0,
+                            speed: parseInt(bTask.downloadSpeed) || 0,
+                            status: bTask.status,
+                            progress: (parseInt(bTask.completedLength) / parseInt(bTask.totalLength)) * 100 || 0,
+                            errorMessage: bTask.errorMessage || null,
+                            errorCode: bTask.errorCode || null,
+                            seeds: parseInt(bTask.numSeeders) || 0,
+                            peers: parseInt(bTask.connections) || 0,
+                            infoHash: bTask.infoHash || null,
+                            timestamp: new Date().toISOString()
                         };
+                        backendTasksMap.delete(newGid); // Remove from map so we don't add it again
+                    } else {
+                        // Truly missing - Apply grace period logic
+                        const taskTime = new Date(localTask.timestamp || 0).getTime();
+                        const now = new Date().getTime();
+                        const isYoung = (now - taskTime) < 60000; // 60 seconds grace
+
+                        if (isYoung && localTask.status === 'active') {
+                            // Keep it as is (don't remove)
+                            // Maybe update status to 'initializing' to let user know?
+                            // For now, keep as 'active' (Resolving metadata...)
+                        } else if (localTask.status !== 'removed') {
+                            // Mark as ERROR if it's old and missing, so we can see it failed
+                            console.warn(`Task ${localTask.gid} missing from backend response (Available: ${[...backendTasksMap.keys()].join(', ')}). Marking as error.`);
+                            newTasks[i] = {
+                                ...localTask,
+                                status: 'error',
+                                name: localTask.name.startsWith('[Lost]') ? localTask.name : `[Lost] ${localTask.name}`,
+                                speed: 0
+                            };
+                        }
                     }
                 }
             }
@@ -217,6 +276,16 @@ export function AppProvider({ children }) {
     };
 
     const addMagnet = async (magnet) => {
+        // CHECK: Only allow one active download at a time
+        const hasActiveDownload = tasks.some(t =>
+            t.status === 'active' || t.status === 'waiting'
+        );
+
+        if (hasActiveDownload) {
+            addToast("Please wait for the current download to complete before adding a new one", "warning");
+            return null;
+        }
+
         try {
             const res = await TorrentAPI.addMagnet(magnet);
 
@@ -245,6 +314,16 @@ export function AppProvider({ children }) {
     };
 
     const addTorrentFile = async (base64Content) => {
+        // CHECK: Only allow one active download at a time  
+        const hasActiveDownload = tasks.some(t =>
+            t.status === 'active' || t.status === 'waiting'
+        );
+
+        if (hasActiveDownload) {
+            addToast("⏳ Download in progress. Please wait for it to complete before adding another torrent.", "warning");
+            return null;
+        }
+
         try {
             const res = await TorrentAPI.addTorrentFile(base64Content);
 
@@ -321,7 +400,7 @@ export function AppProvider({ children }) {
             apiUrl, setApiUrl: setApiUrlState,
             isConnected, checkConnection, disconnect,
             tasks, addMagnet, addTorrentFile, removeTask, pauseTask, resumeTask, clearHistory,
-            driveInfo, lastUpdated
+            driveInfo, lastUpdated, backendGids, logs
         }}>
             {children}
         </AppContext.Provider>
