@@ -19,6 +19,7 @@ export function AppProvider({ children }) {
     // --- Refs for Locks & Ghost Prevention ---
     const interactionInProgress = useRef(false); // Lock for connection attempts
     const ignoredTaskIds = useRef(new Set()); // Blacklist for deleted tasks (Ghost Killer)
+    const lastLoggedBackendGids = useRef([]); // Track previous GIDs to reduce log spam
 
     // Update Axios and LocalStorage when URL changes
     useEffect(() => {
@@ -129,7 +130,15 @@ export function AppProvider({ children }) {
         [...active, ...waiting, ...stopped].forEach(t => backendTasksMap.set(t.gid, t));
 
         // DEBUG: Log all backend GIDs to help diagnose "Lost" tasks
-        console.log("Backend GIDs:", [...backendTasksMap.keys()]);
+        const currentGids = [...backendTasksMap.keys()].sort();
+        const prevGids = lastLoggedBackendGids.current;
+        const isSame = currentGids.length === prevGids.length &&
+                       currentGids.every((val, index) => val === prevGids[index]);
+
+        if (!isSame) {
+            console.log("Backend GIDs Changed:", currentGids);
+            lastLoggedBackendGids.current = currentGids;
+        }
 
         // CLEANUP: Remove IDs from ignored list if they are truly gone from backend
         // This keeps our blacklist small
