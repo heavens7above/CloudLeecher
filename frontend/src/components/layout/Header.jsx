@@ -5,12 +5,14 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 
 export function Header() {
-    const { isConnected, apiUrl, setApiUrl, driveInfo, checkConnection, disconnect } = useApp();
+    const { isConnected, apiUrl, setApiUrl, apiKey, setApiKey, driveInfo, checkConnection, disconnect } = useApp();
     const [showSettings, setShowSettings] = useState(!apiUrl);
     const [tempUrl, setTempUrl] = useState(apiUrl);
+    const [tempKey, setTempKey] = useState(apiKey);
 
     const handleSaveUrl = () => {
         setApiUrl(tempUrl);
+        setApiKey(tempKey);
         setShowSettings(false);
     };
 
@@ -98,6 +100,13 @@ export function Header() {
                                 value={tempUrl}
                                 onChange={(e) => setTempUrl(e.target.value)}
                                 placeholder="Enter Ngrok Public URL"
+                                className="w-full text-sm bg-black/50"
+                            />
+                            <Input
+                                type="password"
+                                value={tempKey}
+                                onChange={(e) => setTempKey(e.target.value)}
+                                placeholder="Enter API Key (from Colab logs)"
                                 className="w-full text-sm bg-black/50"
                             />
                             <div className="flex gap-2">
