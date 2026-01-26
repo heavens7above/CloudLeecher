@@ -36,15 +36,27 @@ export function AppProvider({ children }) {
     useEffect(() => {
         if (!apiUrl || !isConnected) return;
 
-        const interval = setInterval(async () => {
+        let timeoutId;
+        let isCancelled = false;
+
+        const poll = async () => {
             try {
                 await refreshStatus();
             } catch (err) {
                 console.error('Polling failed:', err);
+            } finally {
+                if (!isCancelled) {
+                    timeoutId = setTimeout(poll, 3000);
+                }
             }
-        }, 3000);
+        };
 
-        return () => clearInterval(interval);
+        poll();
+
+        return () => {
+            isCancelled = true;
+            clearTimeout(timeoutId);
+        };
     }, [apiUrl, isConnected]);
 
     const checkConnection = async () => {
