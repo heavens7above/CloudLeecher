@@ -89,7 +89,7 @@ function TaskCard({ task }) {
             case 'complete': return 'text-gray-400'; // Dimmed for completed
             case 'error': return 'text-white underline decoration-wavy decoration-white/30'; // Underlined for error
             case 'paused': return 'text-gray-500'; // Very dimmed for paused
-            case 'removed': return 'text-red-900 line-through opacity-50'; // DEBUG: Removed tasks
+            case 'removed': return 'text-red-900 line-through opacity-50'; // DEBUG: Removed tasks (Visual Indicator)
             default: return 'text-gray-600';
         }
     };
