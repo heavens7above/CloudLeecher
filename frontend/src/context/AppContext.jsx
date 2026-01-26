@@ -165,7 +165,7 @@ export function AppProvider({ children }) {
                     // DEBUG: Detect if backend explicitly removes it
                     if (newStatus === 'removed') {
                         console.warn(`Task ${localTask.gid} returned as 'removed' by backend.`);
-                        newStatus = 'error'; // Force visible
+                        newStatus = 'removed'; // Force visible
                         if (!newName.startsWith('[Server Removed]')) {
                             newName = `[Server Removed] ${newName}`;
                         }
@@ -356,7 +356,7 @@ export function AppProvider({ children }) {
         ignoredTaskIds.current.add(gid);
 
         // 2. Optimistic Update - Remove immediately from list
-        setTasks(prev => prev.filter(t => t.gid !== gid));
+        setTasks(prev => prev.map(t => t.gid === gid ? { ...t, status: 'removed' } : t));
 
         try {
             await TorrentAPI.remove(gid);
