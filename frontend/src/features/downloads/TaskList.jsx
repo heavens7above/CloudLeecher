@@ -100,6 +100,7 @@ function TaskCard({ task }) {
             case 'complete': return <CheckCircle size={16} className="text-white" />;
             case 'error': return <AlertCircle size={16} className="text-white" />;
             case 'paused': return <Pause size={16} />;
+            case 'removed': return <Trash2 size={16} className="text-red-900 opacity-50" />;
             default: return <Clock size={16} />;
         }
     };
@@ -121,12 +122,14 @@ function TaskCard({ task }) {
         <Card className="hover:border-emerald-500/30 transition-colors overflow-hidden">
             <CardContent className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
                 <div className={`p-3 rounded-lg bg-white/5 border border-white/5 ${getStatusColor(task.status)} shrink-0`}>
-                    {task.status === 'active' ? <LoaderIcon /> : <File size={24} />}
+                    {task.status === 'active' ? <LoaderIcon /> :
+                     task.status === 'removed' ? <Trash2 size={24} /> :
+                     <File size={24} />}
                 </div>
 
                 <div className="flex-1 min-w-0 w-full">
                     <div className="flex items-center justify-between mb-1 gap-2">
-                        <h4 className="font-medium text-white truncate flex-1">{task.name}</h4>
+                        <h4 className={`font-medium truncate flex-1 ${task.status === 'removed' ? 'text-red-900 line-through opacity-50' : 'text-white'}`}>{task.name}</h4>
                         <span className={`text-xs font-semibold uppercase tracking-wider ${getStatusColor(task.status)} shrink-0`}>
                             {task.status}
                         </span>
