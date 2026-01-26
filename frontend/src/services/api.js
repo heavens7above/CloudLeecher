@@ -17,6 +17,14 @@ export const setApiUrl = (url) => {
     }
 };
 
+export const setApiKey = (key) => {
+    if (key) {
+        api.defaults.headers.common['x-api-key'] = key;
+    } else {
+        delete api.defaults.headers.common['x-api-key'];
+    }
+};
+
 export const TorrentAPI = {
     checkHealth: async () => {
         return api.get('/health');
