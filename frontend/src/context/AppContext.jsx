@@ -124,9 +124,19 @@ export function AppProvider({ children }) {
             stopped: stopped.map(t => t.gid)
         });
 
-        // Create a map of all backend tasks for quick lookup
+        // Create lookups for optimized matching
         const backendTasksMap = new Map();
-        [...active, ...waiting, ...stopped].forEach(t => backendTasksMap.set(t.gid, t));
+        const infoHashMap = new Map();
+        const nameMap = new Map();
+
+        [...active, ...waiting, ...stopped].forEach(t => {
+            backendTasksMap.set(t.gid, t);
+            if (t.infoHash) infoHashMap.set(t.infoHash, t);
+
+            // Extract name consistent with other logic
+            const name = t.files?.[0]?.path?.split('/').pop();
+            if (name) nameMap.set(name, t);
+        });
 
         // DEBUG: Log all backend GIDs to help diagnose "Lost" tasks
         console.log("Backend GIDs:", [...backendTasksMap.keys()]);
@@ -194,20 +204,33 @@ export function AppProvider({ children }) {
 
                     let foundFollowUpTask = null;
 
-                    // Strategy 1: Check all backend tasks for one that "followed" our GID
-                    for (const [newGid, bTask] of backendTasksMap.entries()) {
-                        // Check if this backend task has our old GID in its history/metadata
-                        // Unfortunately aria2 doesn't always provide backward references,
-                        // so we use heuristics: same name, similar size, within time window
-                        const sameName = bTask.files?.[0]?.path?.split('/').pop() === localTask.name;
-                        const sameInfoHash = bTask.infoHash && bTask.infoHash === localTask.infoHash;
-                        const gidPrefix = newGid.startsWith(localTask.gid); // New GID often extends the old one
+                    // Strategy 1: Fast Lookup via Maps (O(1))
+                    let match = null;
 
-                        if (gidPrefix || sameInfoHash || (sameName && localTask.name !== 'Uploading torrent file...' && localTask.name !== 'Resolving metadata...')) {
-                            console.log(`🔄 GID TRANSITION DETECTED: ${localTask.gid} → ${newGid} (${localTask.name})`);
-                            foundFollowUpTask = { newGid, bTask };
-                            break;
+                    // 1. Check InfoHash
+                    if (localTask.infoHash) {
+                        match = infoHashMap.get(localTask.infoHash);
+                    }
+
+                    // 2. Check Name (if not found yet and name is valid)
+                    if (!match && localTask.name && localTask.name !== 'Uploading torrent file...' && localTask.name !== 'Resolving metadata...') {
+                        match = nameMap.get(localTask.name);
+                    }
+
+                    // 3. Fallback: Check GID Prefix (O(N) - scan only if needed)
+                    if (!match) {
+                        for (const [newGid, bTask] of backendTasksMap.entries()) {
+                            if (newGid.startsWith(localTask.gid)) {
+                                match = bTask;
+                                break;
+                            }
                         }
+                    }
+
+                    if (match) {
+                        // Found a match!
+                        console.log(`🔄 GID TRANSITION DETECTED: ${localTask.gid} → ${match.gid} (${localTask.name})`);
+                        foundFollowUpTask = { newGid: match.gid, bTask: match };
                     }
 
                     if (foundFollowUpTask) {
