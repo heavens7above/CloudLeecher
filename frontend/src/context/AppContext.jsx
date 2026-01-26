@@ -355,8 +355,8 @@ export function AppProvider({ children }) {
         // 1. Add to Ignore List (Ghost Killer)
         ignoredTaskIds.current.add(gid);
 
-        // 2. Optimistic Update - Remove immediately from list
-        setTasks(prev => prev.filter(t => t.gid !== gid));
+        // 2. Optimistic Update - Mark as removed instead of deleting
+        setTasks(prev => prev.map(t => t.gid === gid ? { ...t, status: 'removed', speed: 0 } : t));
 
         try {
             await TorrentAPI.remove(gid);
