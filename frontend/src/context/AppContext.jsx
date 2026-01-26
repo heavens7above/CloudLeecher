@@ -126,10 +126,30 @@ export function AppProvider({ children }) {
 
         // Create a map of all backend tasks for quick lookup
         const backendTasksMap = new Map();
-        [...active, ...waiting, ...stopped].forEach(t => backendTasksMap.set(t.gid, t));
+        const allBackendTasks = [...active, ...waiting, ...stopped];
 
-        // DEBUG: Log all backend GIDs to help diagnose "Lost" tasks
-        console.log("Backend GIDs:", [...backendTasksMap.keys()]);
+        // Auxiliary Maps for O(1) Lookup and Binary Search
+        const infoHashMap = new Map();
+        const nameMap = new Map();
+        const sortedGids = [];
+
+        allBackendTasks.forEach(t => {
+            backendTasksMap.set(t.gid, t);
+            sortedGids.push(t.gid);
+
+            // Populate auxiliary maps, prioritizing the first occurrence (Active > Waiting > Stopped)
+            if (t.infoHash && !infoHashMap.has(t.infoHash)) {
+                infoHashMap.set(t.infoHash, { gid: t.gid, task: t });
+            }
+
+            const name = t.files?.[0]?.path?.split('/').pop();
+            if (name && !nameMap.has(name)) {
+                nameMap.set(name, { gid: t.gid, task: t });
+            }
+        });
+
+        // Sort GIDs for binary search prefix matching
+        sortedGids.sort();
 
         // CLEANUP: Remove IDs from ignored list if they are truly gone from backend
         // This keeps our blacklist small
@@ -138,6 +158,26 @@ export function AppProvider({ children }) {
                 ignoredTaskIds.current.delete(ignoredGid);
             }
         }
+
+        // Helper: Binary Search for GID Prefix
+        const findGidByPrefix = (prefix) => {
+            let low = 0, high = sortedGids.length - 1;
+            let result = -1;
+            while (low <= high) {
+                const mid = (low + high) >>> 1;
+                if (sortedGids[mid] >= prefix) {
+                    result = mid;
+                    high = mid - 1;
+                } else {
+                    low = mid + 1;
+                }
+            }
+            if (result !== -1) {
+                const candidate = sortedGids[result];
+                if (candidate.startsWith(prefix)) return candidate;
+            }
+            return null;
+        };
 
         setTasks(currentTasks => {
             const newTasks = [...currentTasks];
@@ -194,25 +234,41 @@ export function AppProvider({ children }) {
 
                     let foundFollowUpTask = null;
 
-                    // Strategy 1: Check all backend tasks for one that "followed" our GID
-                    for (const [newGid, bTask] of backendTasksMap.entries()) {
-                        // Check if this backend task has our old GID in its history/metadata
-                        // Unfortunately aria2 doesn't always provide backward references,
-                        // so we use heuristics: same name, similar size, within time window
-                        const sameName = bTask.files?.[0]?.path?.split('/').pop() === localTask.name;
-                        const sameInfoHash = bTask.infoHash && bTask.infoHash === localTask.infoHash;
-                        const gidPrefix = newGid.startsWith(localTask.gid); // New GID often extends the old one
+                    // Strategy: Optimized Lookups (O(1) maps + O(log N) binary search)
+                    // replacing the previous O(N) loop
 
-                        if (gidPrefix || sameInfoHash || (sameName && localTask.name !== 'Uploading torrent file...' && localTask.name !== 'Resolving metadata...')) {
-                            console.log(`🔄 GID TRANSITION DETECTED: ${localTask.gid} → ${newGid} (${localTask.name})`);
-                            foundFollowUpTask = { newGid, bTask };
-                            break;
+                    // 1. Check InfoHash (Strongest Match)
+                    if (localTask.infoHash && infoHashMap.has(localTask.infoHash)) {
+                        const match = infoHashMap.get(localTask.infoHash);
+                        // Ensure it hasn't been claimed by another task
+                        if (backendTasksMap.has(match.gid)) {
+                             foundFollowUpTask = { newGid: match.gid, bTask: match.task };
+                        }
+                    }
+
+                    // 2. Check Name (Heuristic Match)
+                    if (!foundFollowUpTask && localTask.name && nameMap.has(localTask.name)) {
+                        if (localTask.name !== 'Uploading torrent file...' && localTask.name !== 'Resolving metadata...') {
+                             const match = nameMap.get(localTask.name);
+                             if (backendTasksMap.has(match.gid)) {
+                                 foundFollowUpTask = { newGid: match.gid, bTask: match.task };
+                             }
+                        }
+                    }
+
+                    // 3. Check GID Prefix (Fallback for GID extension)
+                    if (!foundFollowUpTask) {
+                        const matchedGid = findGidByPrefix(localTask.gid);
+                        if (matchedGid && backendTasksMap.has(matchedGid)) {
+                             foundFollowUpTask = { newGid: matchedGid, bTask: backendTasksMap.get(matchedGid) };
                         }
                     }
 
                     if (foundFollowUpTask) {
-                        // GID CHANGED - Update the task with new GID and latest info
                         const { newGid, bTask } = foundFollowUpTask;
+                        console.log(`🔄 GID TRANSITION DETECTED: ${localTask.gid} → ${newGid} (${localTask.name})`);
+
+                        // GID CHANGED - Update the task with new GID and latest info
                         newTasks[i] = {
                             ...localTask,
                             gid: newGid, // CRITICAL: Update to new GID
@@ -242,7 +298,7 @@ export function AppProvider({ children }) {
                             // For now, keep as 'active' (Resolving metadata...)
                         } else if (localTask.status !== 'removed') {
                             // Mark as ERROR if it's old and missing, so we can see it failed
-                            console.warn(`Task ${localTask.gid} missing from backend response (Available: ${[...backendTasksMap.keys()].join(', ')}). Marking as error.`);
+                            console.warn(`Task ${localTask.gid} missing from backend response. Marking as error.`);
                             newTasks[i] = {
                                 ...localTask,
                                 status: 'error',
