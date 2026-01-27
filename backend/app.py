@@ -1,5 +1,5 @@
 import xmlrpc.client
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import os
 import shutil
@@ -7,20 +7,40 @@ import base64
 import json
 from datetime import datetime
 from collections import deque
+import threading
+import time
+import secrets
 
 app = Flask(__name__)
 CORS(app)
 
 # Configuration
-DOWNLOAD_DIR = "/content/drive/MyDrive/TorrentDownloads"
+# Security: Load API Key from env or generate a random one
+API_KEY = os.environ.get('CLOUDLEECHER_API_KEY')
+if not API_KEY:
+    API_KEY = secrets.token_hex(16)
+    # Log to console (which might be redirected)
+    print(f"WARNING: No API Key provided. Generated: {API_KEY}")
+
+# Download paths
+DOWNLOAD_DIR = "/content/temp_downloads"  # Local temporary storage
+DRIVE_DIR = "/content/drive/MyDrive/TorrentDownloads" # Final destination in Drive
 ARIA2_RPC_URL = "http://localhost:6800/rpc"
 LOG_FILE = "/content/backend_logs.json"
+
+# Ensure directories exist
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(DRIVE_DIR, exist_ok=True)
 
 # In-memory log storage (last 100 entries)
 logs = deque(maxlen=100)
 
 # Connect to Aria2 RPC
 s = xmlrpc.client.ServerProxy(ARIA2_RPC_URL)
+
+# History of tasks moved to Drive
+history_log = deque(maxlen=50)
+processed_gids = set()
 
 def log(level, operation, message, gid=None, extra=None):
     """Add entry to log with timestamp and details"""
@@ -43,6 +63,118 @@ def log(level, operation, message, gid=None, extra=None):
     
     # Print to console for Colab visibility
     print(f"[{level.upper()}] {operation}: {message}" + (f" (GID: {gid})" if gid else ""))
+
+# --- Authentication Middleware ---
+@app.before_request
+def check_auth():
+    if request.method == 'OPTIONS':
+        return
+    if request.path == '/health': # Allow health check without auth
+        return
+
+    client_key = request.headers.get('x-api-key')
+    if client_key != API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+
+# --- Background Monitor ---
+class BackgroundMonitor(threading.Thread):
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+
+    def run(self):
+        while self.running:
+            try:
+                self.check_and_move_completed()
+            except Exception as e:
+                print(f"Monitor Error: {e}")
+            time.sleep(5)
+
+    def check_and_move_completed(self):
+        try:
+            stopped = s.aria2.tellStopped(0, 100, ["gid", "status", "files", "totalLength", "completedLength", "infoHash"])
+            for task in stopped:
+                if task['status'] == 'complete' and task['gid'] not in processed_gids:
+                    self.move_to_drive(task)
+        except Exception as e:
+            pass
+
+    def move_to_drive(self, task):
+        gid = task['gid']
+        files = task.get('files', [])
+        if not files:
+            return
+
+        # Determine the root file/folder name
+        # Aria2 returns absolute paths. We need to find the file relative to DOWNLOAD_DIR
+        # Usually the first file's path starts with DOWNLOAD_DIR
+
+        # Simple heuristic: Move the top-level item (file or directory)
+        # Check if it's a multi-file torrent
+        first_file_path = files[0]['path']
+        if not first_file_path.startswith(DOWNLOAD_DIR):
+            # Something is wrong, maybe path configuration issue
+            return
+
+        # Rel path
+        rel_path = os.path.relpath(first_file_path, DOWNLOAD_DIR)
+        top_level_name = rel_path.split(os.sep)[0]
+
+        source_path = os.path.join(DOWNLOAD_DIR, top_level_name)
+
+        # Safety check: Prevent zombie loops if source is missing
+        if not os.path.exists(source_path):
+            log("warning", "move_to_drive", f"Source not found: {source_path}. Assuming already moved or deleted.", gid=gid)
+            try:
+                s.aria2.removeDownloadResult(gid)
+                processed_gids.add(gid)
+
+                # Add to history as 'complete' (best effort)
+                task_copy = task.copy()
+                task_copy['status'] = 'complete'
+                task_copy['drive_path'] = "Lost (Source missing)"
+                history_log.append(task_copy)
+            except:
+                pass
+            return
+
+        # Handle collision
+        dest_path = os.path.join(DRIVE_DIR, top_level_name)
+        if os.path.exists(dest_path):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            name, ext = os.path.splitext(top_level_name)
+            if os.path.isdir(source_path):
+                # Directory
+                dest_path = os.path.join(DRIVE_DIR, f"{top_level_name}_{timestamp}")
+            else:
+                # File
+                dest_path = os.path.join(DRIVE_DIR, f"{name}_{timestamp}{ext}")
+
+        log("info", "move_to_drive", f"Moving {top_level_name} to Drive...", gid=gid)
+        try:
+            shutil.move(source_path, dest_path)
+            log("info", "move_to_drive", f"Successfully moved to: {dest_path}", gid=gid)
+
+            # Clean up aria2
+            s.aria2.removeDownloadResult(gid)
+            processed_gids.add(gid)
+
+            # Add to history
+            # Update task files path to point to Drive for display
+            # We can't update all paths easily, but we can assume the task name remains
+            task_copy = task.copy()
+            task_copy['status'] = 'complete' # Ensure status is complete
+            # We add a custom field to indicate it's safe on drive
+            task_copy['drive_path'] = dest_path
+            history_log.append(task_copy)
+
+        except Exception as e:
+            log("error", "move_to_drive", f"Move failed: {e}", gid=gid)
+
+# Start monitor
+monitor = BackgroundMonitor()
+monitor.start()
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -73,7 +205,9 @@ def add_magnet():
         return jsonify({"error": "Another download is already in progress. Please wait for it to complete."}), 429
     
     try:
-        gid = s.aria2.addUri([magnet_link])
+        # Enforce download dir option just in case
+        options = {"dir": DOWNLOAD_DIR}
+        gid = s.aria2.addUri([magnet_link], options)
         log("info", "add_magnet", "Magnet link added successfully", gid=gid, extra={"magnet": magnet_link[:50] + "..."})
         return jsonify({"status": "success", "gid": gid})
     except Exception as e:
@@ -101,7 +235,9 @@ def add_torrent_file():
         binary_torrent = xmlrpc.client.Binary(raw_bytes)
         
         log("info", "add_torrent_file", f"Received torrent file ({len(raw_bytes)} bytes), adding to aria2...")
-        gid = s.aria2.addTorrent(binary_torrent)
+        # Enforce download dir
+        options = {"dir": DOWNLOAD_DIR}
+        gid = s.aria2.addTorrent(binary_torrent, [], options)
         log("info", "add_torrent_file", "Torrent file added successfully, downloading metadata...", gid=gid)
         
         # Try to get immediate status to log torrent info
@@ -128,6 +264,14 @@ def get_status():
         waiting = s.aria2.tellWaiting(0, 100, basic_keys)
         stopped = s.aria2.tellStopped(0, 100, basic_keys)
         
+        # Merge history into stopped
+        # Convert history_log to list
+        history_list = list(history_log)
+        # Prepend to stopped so they show up? Or append?
+        # Stopped from aria2 includes error/removed tasks that haven't been purged.
+        # History includes successfully moved tasks.
+        stopped.extend(history_list)
+
         # Track GID transitions for debugging
         all_tasks = active + waiting + stopped
         all_gids = [t['gid'] for t in all_tasks]
@@ -149,10 +293,12 @@ def get_status():
                     gid=task['gid'])
         
         if all_gids:
-            log_msg = f"Currently tracking {len(all_gids)} tasks"
-            if gid_transitions:
-                log_msg += f" | Transitions: {', '.join(gid_transitions)}"
-            log("info", "status_poll", log_msg, extra={"gids": all_gids})
+            # log_msg = f"Currently tracking {len(all_gids)} tasks"
+            # if gid_transitions:
+            #     log_msg += f" | Transitions: {', '.join(gid_transitions)}"
+            # log("info", "status_poll", log_msg, extra={"gids": all_gids})
+            # Reduced logging frequency to avoid spam
+            pass
         
         return jsonify({
             "active": active,
@@ -189,6 +335,18 @@ def resume_download():
 def remove_download():
     try:
         gid = request.json.get('gid')
+        # Check if it's in history
+        in_history = False
+        for i, task in enumerate(history_log):
+            if task['gid'] == gid:
+                del history_log[i]
+                in_history = True
+                break
+
+        if in_history:
+             log("info", "remove_download", "Removed from history", gid=gid)
+             return jsonify({"status": "removed", "gid": gid})
+
         s.aria2.forceRemove(gid)
         log("info", "remove_download", "Download removed", gid=gid)
         return jsonify({"status": "removed", "gid": gid})
@@ -209,14 +367,20 @@ def remove_download():
 @app.route('/api/drive/info', methods=['GET'])
 def drive_info():
     try:
-        total, used, free = shutil.disk_usage(DOWNLOAD_DIR)
+        # Check usage of DRIVE_DIR since that's where we store files
+        total, used, free = shutil.disk_usage(DRIVE_DIR)
         return jsonify({
             "total": total,
             "used": used,
             "free": free
         })
     except Exception as e:
-        return jsonify({"total": 0, "used": 0, "free": 0})
+        # Fallback to root or temp
+        try:
+             total, used, free = shutil.disk_usage(DOWNLOAD_DIR)
+             return jsonify({"total": total, "used": used, "free": free})
+        except:
+             return jsonify({"total": 0, "used": 0, "free": 0})
 
 @app.route('/api/cleanup', methods=['POST'])
 def cleanup_all():
@@ -243,6 +407,9 @@ def cleanup_all():
             removed_count += len(stopped)
         except:
             pass
+
+        history_log.clear()
+        processed_gids.clear()
         
         log("info", "cleanup_all", f"Cleaned up {removed_count} tasks")
         return jsonify({"status": "success", "removed": removed_count})
@@ -278,4 +445,5 @@ if __name__ == "__main__":
     log("info", "startup", "Cleaning up stalled tasks from previous session...")
     purge_stalled_downloads()
     
-    app.run(port=5000)
+    # Use threaded=True for better concurrent handling
+    app.run(port=5000, threaded=True)

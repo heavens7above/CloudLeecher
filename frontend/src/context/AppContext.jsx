@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { setApiUrl, TorrentAPI } from '../services/api';
+import { setApiUrl, setApiKey, TorrentAPI } from '../services/api';
 import { useToast } from './ToastContext';
 
 const AppContext = createContext();
@@ -8,6 +8,7 @@ export function AppProvider({ children }) {
     const { addToast } = useToast();
     // --- Persistent Settings ---
     const [apiUrl, setApiUrlState] = useState(() => localStorage.getItem('CL_API_URL') || '');
+    const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('CL_API_KEY') || '');
     const [tasks, setTasks] = useState(() => JSON.parse(localStorage.getItem('CL_TASKS') || '[]'));
 
     // --- Runtime State ---
@@ -26,6 +27,13 @@ export function AppProvider({ children }) {
         setApiUrl(apiUrl);
         if (apiUrl) checkConnection();
     }, [apiUrl]);
+
+    // Update Axios and LocalStorage when API Key changes
+    useEffect(() => {
+        localStorage.setItem('CL_API_KEY', apiKey);
+        setApiKey(apiKey);
+        if (apiUrl) checkConnection();
+    }, [apiKey]);
 
     // Persist Tasks when they change
     useEffect(() => {
@@ -69,6 +77,10 @@ export function AppProvider({ children }) {
             } catch (err) {
                 lastError = err;
                 console.error(`Connection attempt ${i + 1}/${retries} failed:`, err);
+                if (err.response && (err.response.status === 401 || err.response.status === 403)) {
+                     addToast("Authentication Failed. Check API Key.", "error");
+                     break; // Don't retry auth errors
+                }
                 if (i < retries - 1) {
                     await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
                 }
@@ -398,6 +410,7 @@ export function AppProvider({ children }) {
     return (
         <AppContext.Provider value={{
             apiUrl, setApiUrl: setApiUrlState,
+            apiKey, setApiKey: setApiKeyState,
             isConnected, checkConnection, disconnect,
             tasks, addMagnet, addTorrentFile, removeTask, pauseTask, resumeTask, clearHistory,
             driveInfo, lastUpdated, backendGids, logs
