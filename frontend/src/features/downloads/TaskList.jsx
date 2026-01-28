@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Trash2, File, CheckCircle, AlertCircle, Clock, Download } from 'lucide-react';
+import { Play, Pause, Trash2, File, CheckCircle, AlertCircle, Clock, Download, UploadCloud } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -86,8 +86,10 @@ function TaskCard({ task }) {
     const getStatusColor = (status) => {
         switch (status) {
             case 'active': return 'text-white';
+            case 'moving': return 'text-blue-400';
+            case 'saved': return 'text-emerald-400';
             case 'complete': return 'text-gray-400'; // Dimmed for completed
-            case 'error': return 'text-white underline decoration-wavy decoration-white/30'; // Underlined for error
+            case 'error': return 'text-red-400 underline decoration-wavy decoration-red-400/30';
             case 'paused': return 'text-gray-500'; // Very dimmed for paused
             case 'removed': return 'text-red-900 line-through opacity-50'; // DEBUG: Removed tasks
             default: return 'text-gray-600';
@@ -97,8 +99,10 @@ function TaskCard({ task }) {
     const getStatusIcon = (status) => {
         switch (status) {
             case 'active': return <ActivityIcon />;
+            case 'moving': return <UploadCloud size={16} className="text-blue-400 animate-pulse" />;
+            case 'saved': return <CheckCircle size={16} className="text-emerald-400" />;
             case 'complete': return <CheckCircle size={16} className="text-white" />;
-            case 'error': return <AlertCircle size={16} className="text-white" />;
+            case 'error': return <AlertCircle size={16} className="text-red-400" />;
             case 'paused': return <Pause size={16} />;
             default: return <Clock size={16} />;
         }
