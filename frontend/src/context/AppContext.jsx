@@ -8,6 +8,7 @@ export function AppProvider({ children }) {
     const { addToast } = useToast();
     // --- Persistent Settings ---
     const [apiUrl, setApiUrlState] = useState(() => localStorage.getItem('CL_API_URL') || '');
+    const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('CL_API_KEY') || '');
     const [tasks, setTasks] = useState(() => JSON.parse(localStorage.getItem('CL_TASKS') || '[]'));
 
     // --- Runtime State ---
@@ -20,12 +21,13 @@ export function AppProvider({ children }) {
     const interactionInProgress = useRef(false); // Lock for connection attempts
     const ignoredTaskIds = useRef(new Set()); // Blacklist for deleted tasks (Ghost Killer)
 
-    // Update Axios and LocalStorage when URL changes
+    // Update Axios and LocalStorage when URL or Key changes
     useEffect(() => {
         localStorage.setItem('CL_API_URL', apiUrl);
-        setApiUrl(apiUrl);
-        if (apiUrl) checkConnection();
-    }, [apiUrl]);
+        localStorage.setItem('CL_API_KEY', apiKey);
+        setApiUrl(apiUrl, apiKey);
+        if (apiUrl && apiKey) checkConnection();
+    }, [apiUrl, apiKey]);
 
     // Persist Tasks when they change
     useEffect(() => {
@@ -87,6 +89,7 @@ export function AppProvider({ children }) {
 
     const disconnect = () => {
         setApiUrlState('');
+        setApiKeyState('');
         setIsConnected(false);
         addToast("Disconnected from Backend", "info");
     };
@@ -398,6 +401,7 @@ export function AppProvider({ children }) {
     return (
         <AppContext.Provider value={{
             apiUrl, setApiUrl: setApiUrlState,
+            apiKey, setApiKey: setApiKeyState,
             isConnected, checkConnection, disconnect,
             tasks, addMagnet, addTorrentFile, removeTask, pauseTask, resumeTask, clearHistory,
             driveInfo, lastUpdated, backendGids, logs
