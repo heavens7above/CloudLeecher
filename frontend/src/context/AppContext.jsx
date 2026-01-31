@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { setApiUrl, TorrentAPI } from '../services/api';
+import { setApiUrl, setApiKey, TorrentAPI } from '../services/api';
 import { useToast } from './ToastContext';
 
 const AppContext = createContext();
@@ -8,6 +8,7 @@ export function AppProvider({ children }) {
     const { addToast } = useToast();
     // --- Persistent Settings ---
     const [apiUrl, setApiUrlState] = useState(() => localStorage.getItem('CL_API_URL') || '');
+    const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('CL_API_KEY') || '');
     const [tasks, setTasks] = useState(() => JSON.parse(localStorage.getItem('CL_TASKS') || '[]'));
 
     // --- Runtime State ---
@@ -24,8 +25,15 @@ export function AppProvider({ children }) {
     useEffect(() => {
         localStorage.setItem('CL_API_URL', apiUrl);
         setApiUrl(apiUrl);
-        if (apiUrl) checkConnection();
+        if (apiUrl && apiKey) checkConnection();
     }, [apiUrl]);
+
+    // Update Axios and LocalStorage when API Key changes
+    useEffect(() => {
+        localStorage.setItem('CL_API_KEY', apiKey);
+        setApiKey(apiKey);
+        if (apiUrl && apiKey) checkConnection();
+    }, [apiKey]);
 
     // Persist Tasks when they change
     useEffect(() => {
@@ -34,18 +42,22 @@ export function AppProvider({ children }) {
 
     // Polling Loop
     useEffect(() => {
-        if (!apiUrl || !isConnected) return;
+        if (!apiUrl || !apiKey || !isConnected) return;
 
         const interval = setInterval(async () => {
             try {
                 await refreshStatus();
             } catch (err) {
                 console.error('Polling failed:', err);
+                if (err.response && err.response.status === 401) {
+                    setIsConnected(false);
+                    addToast("Authentication Failed. Check API Key.", "error");
+                }
             }
         }, 3000);
 
         return () => clearInterval(interval);
-    }, [apiUrl, isConnected]);
+    }, [apiUrl, apiKey, isConnected]);
 
     const checkConnection = async () => {
         // Debounce / Lock to prevent "Ghost Server" multiple connects
@@ -69,13 +81,19 @@ export function AppProvider({ children }) {
             } catch (err) {
                 lastError = err;
                 console.error(`Connection attempt ${i + 1}/${retries} failed:`, err);
+                if (err.response && err.response.status === 401) {
+                    addToast("Invalid API Key", "error");
+                    setIsConnected(false);
+                    success = false;
+                    break; // Don't retry auth errors
+                }
                 if (i < retries - 1) {
                     await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
                 }
             }
         }
 
-        if (!success) {
+        if (!success && lastError?.response?.status !== 401) {
             console.error('Connection failed after retries:', lastError);
             if (isConnected) addToast("Connection Lost. Check your backend.", "error");
             setIsConnected(false);
@@ -87,6 +105,7 @@ export function AppProvider({ children }) {
 
     const disconnect = () => {
         setApiUrlState('');
+        setApiKeyState('');
         setIsConnected(false);
         addToast("Disconnected from Backend", "info");
     };
@@ -129,7 +148,7 @@ export function AppProvider({ children }) {
         [...active, ...waiting, ...stopped].forEach(t => backendTasksMap.set(t.gid, t));
 
         // DEBUG: Log all backend GIDs to help diagnose "Lost" tasks
-        console.log("Backend GIDs:", [...backendTasksMap.keys()]);
+        // console.log("Backend GIDs:", [...backendTasksMap.keys()]);
 
         // CLEANUP: Remove IDs from ignored list if they are truly gone from backend
         // This keeps our blacklist small
@@ -147,10 +166,6 @@ export function AppProvider({ children }) {
 
                 // If this task is on our kill list, FORCE remove it locally and skip update
                 if (ignoredTaskIds.current.has(localTask.gid)) {
-                    // We mark it as removed, but ideally we should filter it out?
-                    // Let's mark as 'removed' status so UI can filter if needed, 
-                    // or we can just NOT update it.
-                    // IMPORTANT: If we want it gone, we should probably ensure it stays 'removed'.
                     newTasks[i] = { ...localTask, status: 'removed', speed: 0 };
                     continue;
                 }
@@ -162,9 +177,16 @@ export function AppProvider({ children }) {
                     let newStatus = backendTask.status;
                     let newName = backendTask.files?.[0]?.path?.split('/').pop() || localTask.name || 'Unknown File';
 
+                    // Special statuses from backend monitor
+                    if (newStatus === 'moving') {
+                         newName = `[Moving] ${newName}`;
+                    } else if (newStatus === 'saved') {
+                         newName = `${newName}`; // Keep name clean for saved
+                    }
+
                     // DEBUG: Detect if backend explicitly removes it
                     if (newStatus === 'removed') {
-                        console.warn(`Task ${localTask.gid} returned as 'removed' by backend.`);
+                        // console.warn(`Task ${localTask.gid} returned as 'removed' by backend.`);
                         newStatus = 'error'; // Force visible
                         if (!newName.startsWith('[Server Removed]')) {
                             newName = `[Server Removed] ${newName}`;
@@ -178,7 +200,7 @@ export function AppProvider({ children }) {
                         completed: parseInt(backendTask.completedLength) || 0,
                         speed: parseInt(backendTask.downloadSpeed) || 0,
                         status: newStatus,
-                        progress: (parseInt(backendTask.completedLength) / parseInt(backendTask.totalLength)) * 100 || 0,
+                        progress: (parseInt(backendTask.completedLength) / Math.max(parseInt(backendTask.totalLength), 1)) * 100 || 0,
                         errorMessage: backendTask.errorMessage || null,
                         errorCode: backendTask.errorCode || null,
                         seeds: parseInt(backendTask.numSeeders) || 0,
@@ -189,19 +211,13 @@ export function AppProvider({ children }) {
                     backendTasksMap.delete(localTask.gid);
                 } else {
                     // Task MISSING from backend - Check for GID CHANGE first!
-                    // Aria2 sometimes creates a new GID when transitioning from metadata to actual download
-                    // Look for tasks with matching info that might have a new GID
-
                     let foundFollowUpTask = null;
 
                     // Strategy 1: Check all backend tasks for one that "followed" our GID
                     for (const [newGid, bTask] of backendTasksMap.entries()) {
-                        // Check if this backend task has our old GID in its history/metadata
-                        // Unfortunately aria2 doesn't always provide backward references,
-                        // so we use heuristics: same name, similar size, within time window
                         const sameName = bTask.files?.[0]?.path?.split('/').pop() === localTask.name;
                         const sameInfoHash = bTask.infoHash && bTask.infoHash === localTask.infoHash;
-                        const gidPrefix = newGid.startsWith(localTask.gid); // New GID often extends the old one
+                        const gidPrefix = newGid.startsWith(localTask.gid);
 
                         if (gidPrefix || sameInfoHash || (sameName && localTask.name !== 'Uploading torrent file...' && localTask.name !== 'Resolving metadata...')) {
                             console.log(`🔄 GID TRANSITION DETECTED: ${localTask.gid} → ${newGid} (${localTask.name})`);
@@ -211,17 +227,16 @@ export function AppProvider({ children }) {
                     }
 
                     if (foundFollowUpTask) {
-                        // GID CHANGED - Update the task with new GID and latest info
                         const { newGid, bTask } = foundFollowUpTask;
                         newTasks[i] = {
                             ...localTask,
-                            gid: newGid, // CRITICAL: Update to new GID
+                            gid: newGid,
                             name: bTask.files?.[0]?.path?.split('/').pop() || localTask.name,
                             size: parseInt(bTask.totalLength) || 0,
                             completed: parseInt(bTask.completedLength) || 0,
                             speed: parseInt(bTask.downloadSpeed) || 0,
                             status: bTask.status,
-                            progress: (parseInt(bTask.completedLength) / parseInt(bTask.totalLength)) * 100 || 0,
+                            progress: (parseInt(bTask.completedLength) / Math.max(parseInt(bTask.totalLength), 1)) * 100 || 0,
                             errorMessage: bTask.errorMessage || null,
                             errorCode: bTask.errorCode || null,
                             seeds: parseInt(bTask.numSeeders) || 0,
@@ -229,20 +244,18 @@ export function AppProvider({ children }) {
                             infoHash: bTask.infoHash || null,
                             timestamp: new Date().toISOString()
                         };
-                        backendTasksMap.delete(newGid); // Remove from map so we don't add it again
+                        backendTasksMap.delete(newGid);
                     } else {
-                        // Truly missing - Apply grace period logic
+                        // Truly missing
                         const taskTime = new Date(localTask.timestamp || 0).getTime();
                         const now = new Date().getTime();
-                        const isYoung = (now - taskTime) < 60000; // 60 seconds grace
+                        const isYoung = (now - taskTime) < 60000;
 
                         if (isYoung && localTask.status === 'active') {
-                            // Keep it as is (don't remove)
-                            // Maybe update status to 'initializing' to let user know?
-                            // For now, keep as 'active' (Resolving metadata...)
-                        } else if (localTask.status !== 'removed') {
-                            // Mark as ERROR if it's old and missing, so we can see it failed
-                            console.warn(`Task ${localTask.gid} missing from backend response (Available: ${[...backendTasksMap.keys()].join(', ')}). Marking as error.`);
+                            // Keep it
+                        } else if (localTask.status !== 'removed' && localTask.status !== 'saved' && localTask.status !== 'moving') {
+                            // Only mark as error if it wasn't already finished/moving
+                            console.warn(`Task ${localTask.gid} missing. Marking as error.`);
                             newTasks[i] = {
                                 ...localTask,
                                 status: 'error',
@@ -254,11 +267,11 @@ export function AppProvider({ children }) {
                 }
             }
 
-            // Add NEW tasks (unless ignored)
+            // Add NEW tasks
             backendTasksMap.forEach((bTask) => {
-                if (ignoredTaskIds.current.has(bTask.gid)) return; // Don't re-add ghosts
+                if (ignoredTaskIds.current.has(bTask.gid)) return;
 
-                console.log("New task detected from backend:", bTask.gid, bTask.name); // DEBUG
+                console.log("New task detected from backend:", bTask.gid);
                 newTasks.unshift({
                     gid: bTask.gid,
                     name: bTask.files?.[0]?.path?.split('/').pop() || 'Unknown Task',
@@ -266,7 +279,7 @@ export function AppProvider({ children }) {
                     completed: parseInt(bTask.completedLength) || 0,
                     speed: parseInt(bTask.downloadSpeed) || 0,
                     status: bTask.status,
-                    progress: (parseInt(bTask.completedLength) / parseInt(bTask.totalLength)) * 100 || 0,
+                    progress: (parseInt(bTask.completedLength) / Math.max(parseInt(bTask.totalLength), 1)) * 100 || 0,
                     timestamp: new Date().toISOString()
                 });
             });
@@ -278,7 +291,7 @@ export function AppProvider({ children }) {
     const addMagnet = async (magnet) => {
         // CHECK: Only allow one active download at a time
         const hasActiveDownload = tasks.some(t =>
-            t.status === 'active' || t.status === 'waiting'
+            (t.status === 'active' || t.status === 'waiting' || t.status === 'moving')
         );
 
         if (hasActiveDownload) {
@@ -308,7 +321,11 @@ export function AppProvider({ children }) {
             return res;
         } catch (err) {
             console.error("Add magnet failed:", err);
-            addToast("Failed to add magnet link", "error");
+            if (err.response && err.response.status === 429) {
+                 addToast("Queue Full. Wait for download to finish.", "warning");
+            } else {
+                 addToast("Failed to add magnet link", "error");
+            }
             throw err;
         }
     };
@@ -316,7 +333,7 @@ export function AppProvider({ children }) {
     const addTorrentFile = async (base64Content) => {
         // CHECK: Only allow one active download at a time  
         const hasActiveDownload = tasks.some(t =>
-            t.status === 'active' || t.status === 'waiting'
+            (t.status === 'active' || t.status === 'waiting' || t.status === 'moving')
         );
 
         if (hasActiveDownload) {
@@ -379,13 +396,15 @@ export function AppProvider({ children }) {
         const tasksToRemove = tasks.filter(t =>
             t.status !== 'active' &&
             t.status !== 'waiting' &&
-            t.status !== 'paused'
+            t.status !== 'paused' &&
+            t.status !== 'moving'
         );
 
         setTasks(prev => prev.filter(t =>
             t.status === 'active' ||
             t.status === 'waiting' ||
-            t.status === 'paused'
+            t.status === 'paused' ||
+            t.status === 'moving'
         ));
 
         tasksToRemove.forEach(t => {
@@ -398,6 +417,7 @@ export function AppProvider({ children }) {
     return (
         <AppContext.Provider value={{
             apiUrl, setApiUrl: setApiUrlState,
+            apiKey, setApiKey: setApiKeyState,
             isConnected, checkConnection, disconnect,
             tasks, addMagnet, addTorrentFile, removeTask, pauseTask, resumeTask, clearHistory,
             driveInfo, lastUpdated, backendGids, logs

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Trash2, File, CheckCircle, AlertCircle, Clock, Download } from 'lucide-react';
+import { Play, Pause, Trash2, File, CheckCircle, AlertCircle, Clock, Download, UploadCloud } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -86,6 +86,8 @@ function TaskCard({ task }) {
     const getStatusColor = (status) => {
         switch (status) {
             case 'active': return 'text-white';
+            case 'moving': return 'text-yellow-400';
+            case 'saved': return 'text-emerald-400';
             case 'complete': return 'text-gray-400'; // Dimmed for completed
             case 'error': return 'text-white underline decoration-wavy decoration-white/30'; // Underlined for error
             case 'paused': return 'text-gray-500'; // Very dimmed for paused
@@ -97,6 +99,8 @@ function TaskCard({ task }) {
     const getStatusIcon = (status) => {
         switch (status) {
             case 'active': return <ActivityIcon />;
+            case 'moving': return <UploadCloud size={16} className="text-yellow-400 animate-pulse" />;
+            case 'saved': return <CheckCircle size={16} className="text-emerald-400" />;
             case 'complete': return <CheckCircle size={16} className="text-white" />;
             case 'error': return <AlertCircle size={16} className="text-white" />;
             case 'paused': return <Pause size={16} />;
@@ -121,15 +125,18 @@ function TaskCard({ task }) {
         <Card className="hover:border-emerald-500/30 transition-colors overflow-hidden">
             <CardContent className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
                 <div className={`p-3 rounded-lg bg-white/5 border border-white/5 ${getStatusColor(task.status)} shrink-0`}>
-                    {task.status === 'active' ? <LoaderIcon /> : <File size={24} />}
+                    {task.status === 'active' || task.status === 'moving' ? <LoaderIcon status={task.status} /> : <File size={24} />}
                 </div>
 
                 <div className="flex-1 min-w-0 w-full">
                     <div className="flex items-center justify-between mb-1 gap-2">
                         <h4 className="font-medium text-white truncate flex-1">{task.name}</h4>
-                        <span className={`text-xs font-semibold uppercase tracking-wider ${getStatusColor(task.status)} shrink-0`}>
-                            {task.status}
-                        </span>
+                        <div className="flex items-center gap-2">
+                            {getStatusIcon(task.status)}
+                            <span className={`text-xs font-semibold uppercase tracking-wider ${getStatusColor(task.status)} shrink-0`}>
+                                {task.status}
+                            </span>
+                        </div>
                     </div>
 
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between text-xs text-gray-400 mb-2 gap-1">
@@ -195,8 +202,8 @@ const ActivityIcon = () => (
     </svg>
 )
 
-const LoaderIcon = () => (
-    <div className="animate-pulse">
-        <Download size={24} />
+const LoaderIcon = ({ status }) => (
+    <div className={status === 'moving' ? 'animate-bounce' : 'animate-pulse'}>
+        {status === 'moving' ? <UploadCloud size={24} /> : <Download size={24} />}
     </div>
 )
