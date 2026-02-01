@@ -5,12 +5,14 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 
 export function Header() {
-    const { isConnected, apiUrl, setApiUrl, driveInfo, checkConnection, disconnect } = useApp();
-    const [showSettings, setShowSettings] = useState(!apiUrl);
+    const { isConnected, apiUrl, setApiUrl, apiKey, setApiKey, driveInfo, checkConnection, disconnect } = useApp();
+    const [showSettings, setShowSettings] = useState(!apiUrl || !apiKey);
     const [tempUrl, setTempUrl] = useState(apiUrl);
+    const [tempKey, setTempKey] = useState(apiKey);
 
-    const handleSaveUrl = () => {
+    const handleSaveSettings = () => {
         setApiUrl(tempUrl);
+        setApiKey(tempKey);
         setShowSettings(false);
     };
 
@@ -93,15 +95,22 @@ export function Header() {
 
                     {/* Settings Panel */}
                     {showSettings && (
-                        <div className="flex flex-col gap-2 animate-fade-in">
+                        <div className="flex flex-col gap-2 animate-fade-in bg-black/40 p-3 rounded-lg border border-white/10">
                             <Input
                                 value={tempUrl}
                                 onChange={(e) => setTempUrl(e.target.value)}
                                 placeholder="Enter Ngrok Public URL"
-                                className="w-full text-sm bg-black/50"
+                                className="w-full text-sm bg-black/50 mb-2"
+                            />
+                            <Input
+                                value={tempKey}
+                                onChange={(e) => setTempKey(e.target.value)}
+                                placeholder="Enter API Key"
+                                type="password"
+                                className="w-full text-sm bg-black/50 mb-2"
                             />
                             <div className="flex gap-2">
-                                <Button size="sm" onClick={handleSaveUrl} className="bg-white text-black hover:bg-gray-200 flex-1">Connect</Button>
+                                <Button size="sm" onClick={handleSaveSettings} className="bg-white text-black hover:bg-gray-200 flex-1">Connect</Button>
                                 <Button size="sm" variant="ghost" onClick={() => setShowSettings(false)} className="flex-1">Cancel</Button>
                             </div>
                         </div>

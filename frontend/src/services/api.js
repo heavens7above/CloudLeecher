@@ -9,11 +9,22 @@ const api = axios.create({
     },
 });
 
+let currentApiKey = '';
+
 export const setApiUrl = (url) => {
     if (url) {
         // Ensure URL doesn't have trailing slash for consistency
         const cleanUrl = url.endsWith('/') ? url.slice(0, -1) : url;
         api.defaults.baseURL = cleanUrl;
+    }
+};
+
+export const setApiKey = (key) => {
+    currentApiKey = key;
+    if (key) {
+        api.defaults.headers.common['x-api-key'] = key;
+    } else {
+        delete api.defaults.headers.common['x-api-key'];
     }
 };
 
