@@ -1,16 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Activity, Wifi, WifiOff, HardDrive, Settings, LogOut } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 
 export function Header() {
-    const { isConnected, apiUrl, setApiUrl, driveInfo, checkConnection, disconnect } = useApp();
-    const [showSettings, setShowSettings] = useState(!apiUrl);
+    const { isConnected, apiUrl, apiKey, setConnectionInfo, driveInfo, checkConnection, disconnect } = useApp();
+    const [showSettings, setShowSettings] = useState(!apiUrl || !apiKey);
     const [tempUrl, setTempUrl] = useState(apiUrl);
+    const [tempKey, setTempKey] = useState(apiKey);
+
+    useEffect(() => {
+        setTempUrl(apiUrl);
+        setTempKey(apiKey);
+    }, [apiUrl, apiKey]);
 
     const handleSaveUrl = () => {
-        setApiUrl(tempUrl);
+        setConnectionInfo(tempUrl, tempKey);
         setShowSettings(false);
     };
 
@@ -97,7 +103,14 @@ export function Header() {
                             <Input
                                 value={tempUrl}
                                 onChange={(e) => setTempUrl(e.target.value)}
-                                placeholder="Enter Ngrok Public URL"
+                                placeholder="Backend URL (Ngrok)"
+                                className="w-full text-sm bg-black/50"
+                            />
+                            <Input
+                                value={tempKey}
+                                onChange={(e) => setTempKey(e.target.value)}
+                                placeholder="API Key (from Colab Output)"
+                                type="password"
                                 className="w-full text-sm bg-black/50"
                             />
                             <div className="flex gap-2">
