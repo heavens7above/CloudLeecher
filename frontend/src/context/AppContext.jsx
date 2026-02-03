@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { setApiUrl, TorrentAPI } from '../services/api';
+import { setApiUrl, setApiKey as setApiHeaders, TorrentAPI } from '../services/api';
 import { useToast } from './ToastContext';
 
 const AppContext = createContext();
@@ -8,6 +8,7 @@ export function AppProvider({ children }) {
     const { addToast } = useToast();
     // --- Persistent Settings ---
     const [apiUrl, setApiUrlState] = useState(() => localStorage.getItem('CL_API_URL') || '');
+    const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('CL_API_KEY') || '');
     const [tasks, setTasks] = useState(() => JSON.parse(localStorage.getItem('CL_TASKS') || '[]'));
 
     // --- Runtime State ---
@@ -20,12 +21,19 @@ export function AppProvider({ children }) {
     const interactionInProgress = useRef(false); // Lock for connection attempts
     const ignoredTaskIds = useRef(new Set()); // Blacklist for deleted tasks (Ghost Killer)
 
-    // Update Axios and LocalStorage when URL changes
+    // Update Axios and LocalStorage when URL/Key changes
     useEffect(() => {
         localStorage.setItem('CL_API_URL', apiUrl);
         setApiUrl(apiUrl);
         if (apiUrl) checkConnection();
     }, [apiUrl]);
+
+    useEffect(() => {
+        localStorage.setItem('CL_API_KEY', apiKey);
+        setApiHeaders(apiKey);
+        // If key changes, we might want to re-check connection
+        if (apiUrl && apiKey) checkConnection();
+    }, [apiKey]);
 
     // Persist Tasks when they change
     useEffect(() => {
@@ -41,6 +49,10 @@ export function AppProvider({ children }) {
                 await refreshStatus();
             } catch (err) {
                 console.error('Polling failed:', err);
+                if (err.response && err.response.status === 401) {
+                    setIsConnected(false);
+                    addToast("Authentication Failed. Check API Key.", "error");
+                }
             }
         }, 3000);
 
@@ -69,6 +81,10 @@ export function AppProvider({ children }) {
             } catch (err) {
                 lastError = err;
                 console.error(`Connection attempt ${i + 1}/${retries} failed:`, err);
+                if (err.response && err.response.status === 401) {
+                     // Don't retry if auth fails
+                     break;
+                }
                 if (i < retries - 1) {
                     await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
                 }
@@ -76,9 +92,12 @@ export function AppProvider({ children }) {
         }
 
         if (!success) {
-            console.error('Connection failed after retries:', lastError);
+            console.error('Connection failed:', lastError);
             if (isConnected) addToast("Connection Lost. Check your backend.", "error");
             setIsConnected(false);
+            if (lastError && lastError.response && lastError.response.status === 401) {
+                addToast("Invalid API Key", "error");
+            }
         }
 
         interactionInProgress.current = false; // Release lock
@@ -87,6 +106,7 @@ export function AppProvider({ children }) {
 
     const disconnect = () => {
         setApiUrlState('');
+        // We keep the API key usually, but let's just disconnect state
         setIsConnected(false);
         addToast("Disconnected from Backend", "info");
     };
@@ -128,9 +148,6 @@ export function AppProvider({ children }) {
         const backendTasksMap = new Map();
         [...active, ...waiting, ...stopped].forEach(t => backendTasksMap.set(t.gid, t));
 
-        // DEBUG: Log all backend GIDs to help diagnose "Lost" tasks
-        console.log("Backend GIDs:", [...backendTasksMap.keys()]);
-
         // CLEANUP: Remove IDs from ignored list if they are truly gone from backend
         // This keeps our blacklist small
         for (const ignoredGid of ignoredTaskIds.current) {
@@ -147,10 +164,6 @@ export function AppProvider({ children }) {
 
                 // If this task is on our kill list, FORCE remove it locally and skip update
                 if (ignoredTaskIds.current.has(localTask.gid)) {
-                    // We mark it as removed, but ideally we should filter it out?
-                    // Let's mark as 'removed' status so UI can filter if needed, 
-                    // or we can just NOT update it.
-                    // IMPORTANT: If we want it gone, we should probably ensure it stays 'removed'.
                     newTasks[i] = { ...localTask, status: 'removed', speed: 0 };
                     continue;
                 }
@@ -161,6 +174,15 @@ export function AppProvider({ children }) {
                     // Update existing
                     let newStatus = backendTask.status;
                     let newName = backendTask.files?.[0]?.path?.split('/').pop() || localTask.name || 'Unknown File';
+
+                    // Backend names might be full paths if we aren't careful,
+                    // but our app.py returns basename for moving tasks.
+                    // Aria2 returns relative path usually.
+
+                    if (newStatus === 'moving' || newStatus === 'saved') {
+                        // These are our custom statuses
+                        newName = backendTask.name || newName;
+                    }
 
                     // DEBUG: Detect if backend explicitly removes it
                     if (newStatus === 'removed') {
@@ -189,19 +211,13 @@ export function AppProvider({ children }) {
                     backendTasksMap.delete(localTask.gid);
                 } else {
                     // Task MISSING from backend - Check for GID CHANGE first!
-                    // Aria2 sometimes creates a new GID when transitioning from metadata to actual download
-                    // Look for tasks with matching info that might have a new GID
-
                     let foundFollowUpTask = null;
 
                     // Strategy 1: Check all backend tasks for one that "followed" our GID
                     for (const [newGid, bTask] of backendTasksMap.entries()) {
-                        // Check if this backend task has our old GID in its history/metadata
-                        // Unfortunately aria2 doesn't always provide backward references,
-                        // so we use heuristics: same name, similar size, within time window
                         const sameName = bTask.files?.[0]?.path?.split('/').pop() === localTask.name;
                         const sameInfoHash = bTask.infoHash && bTask.infoHash === localTask.infoHash;
-                        const gidPrefix = newGid.startsWith(localTask.gid); // New GID often extends the old one
+                        const gidPrefix = newGid.startsWith(localTask.gid);
 
                         if (gidPrefix || sameInfoHash || (sameName && localTask.name !== 'Uploading torrent file...' && localTask.name !== 'Resolving metadata...')) {
                             console.log(`🔄 GID TRANSITION DETECTED: ${localTask.gid} → ${newGid} (${localTask.name})`);
@@ -211,11 +227,11 @@ export function AppProvider({ children }) {
                     }
 
                     if (foundFollowUpTask) {
-                        // GID CHANGED - Update the task with new GID and latest info
+                        // GID CHANGED
                         const { newGid, bTask } = foundFollowUpTask;
                         newTasks[i] = {
                             ...localTask,
-                            gid: newGid, // CRITICAL: Update to new GID
+                            gid: newGid,
                             name: bTask.files?.[0]?.path?.split('/').pop() || localTask.name,
                             size: parseInt(bTask.totalLength) || 0,
                             completed: parseInt(bTask.completedLength) || 0,
@@ -229,20 +245,23 @@ export function AppProvider({ children }) {
                             infoHash: bTask.infoHash || null,
                             timestamp: new Date().toISOString()
                         };
-                        backendTasksMap.delete(newGid); // Remove from map so we don't add it again
+                        backendTasksMap.delete(newGid);
                     } else {
                         // Truly missing - Apply grace period logic
                         const taskTime = new Date(localTask.timestamp || 0).getTime();
                         const now = new Date().getTime();
-                        const isYoung = (now - taskTime) < 60000; // 60 seconds grace
+                        const isYoung = (now - taskTime) < 60000;
 
                         if (isYoung && localTask.status === 'active') {
-                            // Keep it as is (don't remove)
-                            // Maybe update status to 'initializing' to let user know?
-                            // For now, keep as 'active' (Resolving metadata...)
+                            // Keep it
+                        } else if (localTask.status === 'moving' || localTask.status === 'saved') {
+                             // If it was moving/saved and now missing, it might have been cleaned up.
+                             // Keep it as is until user removes it?
+                             // Or mark as removed?
+                             // Let's keep it but mark as 'removed' (history clearable) if it's very old?
+                             // No, just keep it.
                         } else if (localTask.status !== 'removed') {
-                            // Mark as ERROR if it's old and missing, so we can see it failed
-                            console.warn(`Task ${localTask.gid} missing from backend response (Available: ${[...backendTasksMap.keys()].join(', ')}). Marking as error.`);
+                            console.warn(`Task ${localTask.gid} missing from backend response. Marking as error.`);
                             newTasks[i] = {
                                 ...localTask,
                                 status: 'error',
@@ -254,14 +273,16 @@ export function AppProvider({ children }) {
                 }
             }
 
-            // Add NEW tasks (unless ignored)
+            // Add NEW tasks
             backendTasksMap.forEach((bTask) => {
-                if (ignoredTaskIds.current.has(bTask.gid)) return; // Don't re-add ghosts
+                if (ignoredTaskIds.current.has(bTask.gid)) return;
 
-                console.log("New task detected from backend:", bTask.gid, bTask.name); // DEBUG
+                // Handle 'moving'/'saved' specific fields if any
+                const name = bTask.name || bTask.files?.[0]?.path?.split('/').pop() || 'Unknown Task';
+
                 newTasks.unshift({
                     gid: bTask.gid,
-                    name: bTask.files?.[0]?.path?.split('/').pop() || 'Unknown Task',
+                    name: name,
                     size: parseInt(bTask.totalLength) || 0,
                     completed: parseInt(bTask.completedLength) || 0,
                     speed: parseInt(bTask.downloadSpeed) || 0,
@@ -276,25 +297,21 @@ export function AppProvider({ children }) {
     };
 
     const addMagnet = async (magnet) => {
-        // CHECK: Only allow one active download at a time
         const hasActiveDownload = tasks.some(t =>
             t.status === 'active' || t.status === 'waiting'
         );
 
         if (hasActiveDownload) {
-            addToast("Please wait for the current download to complete before adding a new one", "warning");
+            addToast("Please wait for the current download to complete", "warning");
             return null;
         }
 
         try {
             const res = await TorrentAPI.addMagnet(magnet);
-
             if (!res || !res.gid) {
-                console.error("Invalid response from addMagnet:", res);
                 addToast("Failed to add task: Invalid backend response", "error");
                 return;
             }
-
             setTasks(prev => [{
                 gid: res.gid,
                 name: 'Resolving metadata...',
@@ -314,25 +331,21 @@ export function AppProvider({ children }) {
     };
 
     const addTorrentFile = async (base64Content) => {
-        // CHECK: Only allow one active download at a time  
         const hasActiveDownload = tasks.some(t =>
             t.status === 'active' || t.status === 'waiting'
         );
 
         if (hasActiveDownload) {
-            addToast("⏳ Download in progress. Please wait for it to complete before adding another torrent.", "warning");
+            addToast("Please wait for the current download to complete", "warning");
             return null;
         }
 
         try {
             const res = await TorrentAPI.addTorrentFile(base64Content);
-
             if (!res || !res.gid) {
-                console.error("Invalid response from addTorrentFile:", res);
                 addToast("Failed to add task: Invalid backend response", "error");
                 return;
             }
-
             setTasks(prev => [{
                 gid: res.gid,
                 name: 'Uploading torrent file...',
@@ -352,12 +365,8 @@ export function AppProvider({ children }) {
     };
 
     const removeTask = async (gid) => {
-        // 1. Add to Ignore List (Ghost Killer)
         ignoredTaskIds.current.add(gid);
-
-        // 2. Optimistic Update - Remove immediately from list
         setTasks(prev => prev.filter(t => t.gid !== gid));
-
         try {
             await TorrentAPI.remove(gid);
         } catch (err) {
@@ -379,17 +388,18 @@ export function AppProvider({ children }) {
         const tasksToRemove = tasks.filter(t =>
             t.status !== 'active' &&
             t.status !== 'waiting' &&
-            t.status !== 'paused'
+            t.status !== 'paused' &&
+            t.status !== 'moving' // Don't clear moving tasks!
         );
 
         setTasks(prev => prev.filter(t =>
             t.status === 'active' ||
             t.status === 'waiting' ||
-            t.status === 'paused'
+            t.status === 'paused' ||
+            t.status === 'moving'
         ));
 
         tasksToRemove.forEach(t => {
-            // Also ignore them so they don't come back while removing
             ignoredTaskIds.current.add(t.gid);
             TorrentAPI.remove(t.gid).catch(err => console.error("Failed to clear task from backend:", t.gid, err));
         });
@@ -398,6 +408,7 @@ export function AppProvider({ children }) {
     return (
         <AppContext.Provider value={{
             apiUrl, setApiUrl: setApiUrlState,
+            apiKey, setApiKey: setApiKeyState,
             isConnected, checkConnection, disconnect,
             tasks, addMagnet, addTorrentFile, removeTask, pauseTask, resumeTask, clearHistory,
             driveInfo, lastUpdated, backendGids, logs
