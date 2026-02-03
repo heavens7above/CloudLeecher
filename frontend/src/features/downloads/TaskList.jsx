@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Trash2, File, CheckCircle, AlertCircle, Clock, Download } from 'lucide-react';
+import { Play, Pause, Trash2, File, CheckCircle, AlertCircle, Clock, Download, UploadCloud, Check } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -86,7 +86,9 @@ function TaskCard({ task }) {
     const getStatusColor = (status) => {
         switch (status) {
             case 'active': return 'text-white';
-            case 'complete': return 'text-gray-400'; // Dimmed for completed
+            case 'moving': return 'text-yellow-400';
+            case 'saved': return 'text-emerald-400';
+            case 'complete': return 'text-gray-400'; // Dimmed for completed (aria2 sense)
             case 'error': return 'text-white underline decoration-wavy decoration-white/30'; // Underlined for error
             case 'paused': return 'text-gray-500'; // Very dimmed for paused
             case 'removed': return 'text-red-900 line-through opacity-50'; // DEBUG: Removed tasks
@@ -97,7 +99,9 @@ function TaskCard({ task }) {
     const getStatusIcon = (status) => {
         switch (status) {
             case 'active': return <ActivityIcon />;
-            case 'complete': return <CheckCircle size={16} className="text-white" />;
+            case 'moving': return <UploadCloud size={16} className="text-yellow-400 animate-pulse" />;
+            case 'saved': return <CheckCircle size={16} className="text-emerald-400" />;
+            case 'complete': return <Check size={16} className="text-gray-400" />;
             case 'error': return <AlertCircle size={16} className="text-white" />;
             case 'paused': return <Pause size={16} />;
             default: return <Clock size={16} />;
@@ -118,10 +122,13 @@ function TaskCard({ task }) {
     };
 
     return (
-        <Card className="hover:border-emerald-500/30 transition-colors overflow-hidden">
+        <Card className={`hover:border-emerald-500/30 transition-colors overflow-hidden ${task.status === 'saved' ? 'border-emerald-500/20 bg-emerald-900/5' : ''}`}>
             <CardContent className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
                 <div className={`p-3 rounded-lg bg-white/5 border border-white/5 ${getStatusColor(task.status)} shrink-0`}>
-                    {task.status === 'active' ? <LoaderIcon /> : <File size={24} />}
+                    {task.status === 'active' ? <LoaderIcon /> :
+                     task.status === 'moving' ? <UploadCloud size={24} className="animate-bounce" /> :
+                     task.status === 'saved' ? <CheckCircle size={24} /> :
+                     <File size={24} />}
                 </div>
 
                 <div className="flex-1 min-w-0 w-full">
@@ -151,7 +158,7 @@ function TaskCard({ task }) {
                         )}
                     </div>
 
-                    <Progress value={task.progress} />
+                    <Progress value={task.progress} className={task.status === 'moving' ? 'bg-yellow-900/20' : ''} indicatorClassName={task.status === 'moving' ? 'bg-yellow-500' : task.status === 'saved' ? 'bg-emerald-500' : ''} />
                 </div>
 
                 <div className="flex items-center gap-2 w-full sm:w-auto justify-end sm:pl-2">
