@@ -9,6 +9,8 @@ const api = axios.create({
     },
 });
 
+let apiKey = '';
+
 export const setApiUrl = (url) => {
     if (url) {
         // Ensure URL doesn't have trailing slash for consistency
@@ -16,6 +18,18 @@ export const setApiUrl = (url) => {
         api.defaults.baseURL = cleanUrl;
     }
 };
+
+export const setApiKey = (key) => {
+    apiKey = key;
+};
+
+// Add interceptor to inject API Key
+api.interceptors.request.use((config) => {
+    if (apiKey) {
+        config.headers['x-api-key'] = apiKey;
+    }
+    return config;
+});
 
 export const TorrentAPI = {
     checkHealth: async () => {
