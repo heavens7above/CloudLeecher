@@ -30,6 +30,13 @@ export function AppProvider({ children }) {
         if (apiUrl) checkConnection();
     }, [apiUrl, apiKey]);
 
+    // Update Axios and LocalStorage when API Key changes
+    useEffect(() => {
+        localStorage.setItem('CL_API_KEY', apiKey);
+        setApiKey(apiKey);
+        if (apiUrl) checkConnection();
+    }, [apiKey]);
+
     // Persist Tasks when they change
     useEffect(() => {
         localStorage.setItem('CL_TASKS', JSON.stringify(tasks));
