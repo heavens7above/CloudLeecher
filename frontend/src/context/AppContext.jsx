@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { setApiUrl, TorrentAPI } from '../services/api';
+import { setApiConfig, TorrentAPI } from '../services/api';
 import { useToast } from './ToastContext';
 
 const AppContext = createContext();

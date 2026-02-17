@@ -22,6 +22,9 @@ export const setApiUrl = (url, apiKey = null) => {
     }
 };
 
+// Deprecated but kept for compatibility if needed (wraps new config)
+export const setApiUrl = (url) => setApiConfig(url, null);
+
 export const TorrentAPI = {
     checkHealth: async () => {
         return api.get('/health');

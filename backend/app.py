@@ -10,6 +10,7 @@ import threading
 import secrets
 from datetime import datetime
 from collections import deque
+from functools import wraps
 
 app = Flask(__name__)
 CORS(app)
@@ -20,6 +21,12 @@ TEMP_DOWNLOAD_DIR = "/content/temp_downloads"
 FINAL_DRIVE_DIR = "/content/drive/MyDrive/TorrentDownloads"
 ARIA2_RPC_URL = "http://localhost:6800/rpc"
 LOG_FILE = "/content/backend_logs.json"
+API_KEY = os.environ.get("CLOUDLEECHER_API_KEY")
+
+# Create directories
+os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
+# We don't create FINAL_DOWNLOAD_DIR here because Drive might not be mounted yet when this script starts,
+# although in the notebook flow it should be. We'll check it before moving.
 
 # API Security
 API_KEY = os.environ.get("CL_API_KEY") or secrets.token_urlsafe(12)
@@ -38,7 +45,22 @@ uploading_tasks = {}
 uploading_lock = threading.Lock()
 
 # Connect to Aria2 RPC
-s = xmlrpc.client.ServerProxy(ARIA2_RPC_URL)
+# Retry connection in case aria2 is slow to start
+s = None
+for i in range(5):
+    try:
+        s = xmlrpc.client.ServerProxy(ARIA2_RPC_URL)
+        s.aria2.getVersion()
+        print("Connected to Aria2 RPC")
+        break
+    except Exception as e:
+        print(f"Waiting for Aria2... ({i+1}/5)")
+        time.sleep(2)
+
+if not s:
+    print("FATAL: Could not connect to Aria2 RPC")
+
+# --- Helpers ---
 
 def log(level, operation, message, gid=None, extra=None):
     """Add entry to log with timestamp and details"""
@@ -186,10 +208,12 @@ def health():
     })
 
 @app.route('/api/logs', methods=['GET'])
+@require_api_key
 def get_logs():
     return jsonify({"logs": list(logs)})
 
 @app.route('/api/download/magnet', methods=['POST'])
+@require_api_key
 def add_magnet():
     data = request.json
     magnet_link = data.get('magnet')
@@ -205,6 +229,7 @@ def add_magnet():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/download/file', methods=['POST'])
+@require_api_key
 def add_torrent_file():
     data = request.json
     b64_content = data.get('torrent')
@@ -222,6 +247,7 @@ def add_torrent_file():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/status', methods=['GET'])
+@require_api_key
 def get_status():
     try:
         # Standard Aria2 Status
@@ -263,6 +289,7 @@ def get_status():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/control/pause', methods=['POST'])
+@require_api_key
 def pause_download():
     gid = request.json.get('gid')
     try:
@@ -272,6 +299,7 @@ def pause_download():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/control/resume', methods=['POST'])
+@require_api_key
 def resume_download():
     gid = request.json.get('gid')
     try:
@@ -281,6 +309,7 @@ def resume_download():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/control/remove', methods=['POST'])
+@require_api_key
 def remove_download():
     gid = request.json.get('gid')
     try:
@@ -291,6 +320,7 @@ def remove_download():
         return jsonify({"status": "removed", "gid": gid})
 
 @app.route('/api/drive/info', methods=['GET'])
+@require_api_key
 def drive_info():
     try:
         # Check Final Drive Destination
@@ -304,6 +334,7 @@ def drive_info():
         return jsonify({"total": 0, "used": 0, "free": 0})
 
 @app.route('/api/cleanup', methods=['POST'])
+@require_api_key
 def cleanup_all():
     try:
         s.aria2.purgeDownloadResult()
