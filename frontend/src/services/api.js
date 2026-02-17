@@ -9,21 +9,21 @@ const api = axios.create({
     },
 });
 
-export const setApiUrl = (url) => {
+export const setApiUrl = (url, apiKey = null) => {
     if (url) {
         // Ensure URL doesn't have trailing slash for consistency
         const cleanUrl = url.endsWith('/') ? url.slice(0, -1) : url;
         api.defaults.baseURL = cleanUrl;
     }
-};
-
-export const setApiKey = (key) => {
-    if (key) {
-        api.defaults.headers.common['x-api-key'] = key;
+    if (apiKey) {
+        api.defaults.headers.common['x-api-key'] = apiKey;
     } else {
         delete api.defaults.headers.common['x-api-key'];
     }
 };
+
+// Deprecated but kept for compatibility if needed (wraps new config)
+export const setApiUrl = (url) => setApiConfig(url, null);
 
 export const TorrentAPI = {
     checkHealth: async () => {
