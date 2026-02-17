@@ -9,7 +9,7 @@ const api = axios.create({
     },
 });
 
-export const setApiConfig = (url, apiKey) => {
+export const setApiUrl = (url, apiKey = null) => {
     if (url) {
         // Ensure URL doesn't have trailing slash for consistency
         const cleanUrl = url.endsWith('/') ? url.slice(0, -1) : url;

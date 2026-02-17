@@ -5,9 +5,9 @@ import os
 import shutil
 import base64
 import json
-import threading
 import time
-import logging
+import threading
+import secrets
 from datetime import datetime
 from collections import deque
 from functools import wraps
@@ -15,12 +15,11 @@ from functools import wraps
 app = Flask(__name__)
 CORS(app)
 
-# Configuration
-# "Production" configuration via Environment Variables
-DRIVE_MOUNT_PATH = os.environ.get("DRIVE_MOUNT_PATH", "/content/drive")
-FINAL_DOWNLOAD_DIR = os.environ.get("FINAL_DOWNLOAD_DIR", os.path.join(DRIVE_MOUNT_PATH, "MyDrive/TorrentDownloads"))
-TEMP_DOWNLOAD_DIR = os.environ.get("TEMP_DOWNLOAD_DIR", "/content/temp_downloads")
-ARIA2_RPC_URL = os.environ.get("ARIA2_RPC_URL", "http://localhost:6800/rpc")
+# --- Configuration ---
+# Use a local path for high-speed download (SSD), then move to Drive
+TEMP_DOWNLOAD_DIR = "/content/temp_downloads"
+FINAL_DRIVE_DIR = "/content/drive/MyDrive/TorrentDownloads"
+ARIA2_RPC_URL = "http://localhost:6800/rpc"
 LOG_FILE = "/content/backend_logs.json"
 API_KEY = os.environ.get("CLOUDLEECHER_API_KEY")
 
@@ -29,8 +28,21 @@ os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
 # We don't create FINAL_DOWNLOAD_DIR here because Drive might not be mounted yet when this script starts,
 # although in the notebook flow it should be. We'll check it before moving.
 
+# API Security
+API_KEY = os.environ.get("CL_API_KEY") or secrets.token_urlsafe(12)
+
+# Ensure directories exist
+os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(FINAL_DRIVE_DIR, exist_ok=True)
+
+# --- State Management ---
 # In-memory log storage (last 100 entries)
 logs = deque(maxlen=100)
+
+# Track tasks that are currently being moved to Drive
+# Format: gid -> { name: str, size: int, start_time: float }
+uploading_tasks = {}
+uploading_lock = threading.Lock()
 
 # Connect to Aria2 RPC
 # Retry connection in case aria2 is slow to start
@@ -67,159 +79,133 @@ def log(level, operation, message, gid=None, extra=None):
         with open(LOG_FILE, 'a') as f:
             f.write(json.dumps(entry) + '\n')
     except:
-        pass  # Don't crash on log write failure
+        pass
     
     # Print to console for Colab visibility
     print(f"[{level.upper()}] {operation}: {message}" + (f" (GID: {gid})" if gid else ""))
 
-def require_api_key(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not API_KEY:
-            # If no API Key is set in env, we might be in "open" mode or dev mode.
-            # However, for production hardening, we should warn or block.
-            # For now, if no key is set, we allow access (legacy behavior) but log a warning.
-            # Ideally, we block. Let's block if the intent is hardening.
-            # But to prevent locking out users who didn't set it in the old notebook,
-            # we'll only block if CLOUDLEECHER_API_KEY is actually set (even if empty string? no).
-            # If variable is MISSING, maybe allow?
-            # DECISION: The notebook WILL set it. So we enforce it.
-            # If it's missing, we return 500 "Server Misconfiguration".
-            pass # We'll check below
+# --- Authentication Middleware ---
+@app.before_request
+def check_auth():
+    if request.method == 'OPTIONS':
+        return
 
-        if API_KEY:
-            request_key = request.headers.get('x-api-key')
-            if not request_key or request_key != API_KEY:
-                log("warning", "auth", f"Unauthorized access attempt from {request.remote_addr}")
-                return jsonify({"error": "Unauthorized"}), 401
+    # Allow health check without auth for initial connectivity test (optional, but stricter is better)
+    if request.endpoint == 'health':
+        return
 
-        return f(*args, **kwargs)
-    return decorated_function
+    # Check Header
+    key = request.headers.get('x-api-key')
+    if key != API_KEY:
+        # Also allow query param for convenience if needed, but header is preferred
+        return jsonify({"error": "Unauthorized"}), 401
 
-# --- Background Task: Move to Drive ---
+# --- Background Monitor ---
+class DownloadMonitor(threading.Thread):
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = True
 
-moving_gids = set()
-
-def monitor_downloads_loop():
-    """Background thread to monitor and move completed downloads"""
-    while True:
-        try:
-            if not s:
-                time.sleep(5)
-                continue
-
-            # Get stopped tasks (includes complete, error, removed)
-            stopped = s.aria2.tellStopped(0, 1000, ["gid", "status", "files", "totalLength", "completedLength", "errorCode", "errorMessage"])
-
-            for task in stopped:
-                gid = task['gid']
-                status = task['status']
-
-                if status == 'complete' and gid not in moving_gids:
-                    # Double check it's actually fully downloaded
-                    if task['totalLength'] != task['completedLength']:
-                        continue # Weird state, skip
-
-                    moving_gids.add(gid)
-
-                    # Start Move Operation in a separate thread to not block the monitor loop?
-                    # No, monitor loop is slow anyway (5s), blocking is fine for simplicity,
-                    # but if moving takes minutes, we stop processing others.
-                    # Better to spawn a thread for the move.
-                    threading.Thread(target=move_to_drive, args=(task,)).start()
-
-                elif status == 'error' or status == 'removed':
-                    # Auto-cleanup errors/removed after some time?
-                    # For now, let the user manually clear them or use the "cleanup" button.
-                    pass
-
-        except Exception as e:
-            print(f"Monitor Loop Error: {e}")
-
-        time.sleep(5)
-
-def move_to_drive(task):
-    gid = task['gid']
-    try:
-        files = task.get('files', [])
-        if not files:
-            log("error", "move_to_drive", "No files found for task", gid=gid)
-            return
-
-        # Determine what to move.
-        # Aria2 usually downloads to a directory if --dir is set.
-        # If it's a single file torrent, it's at TEMP_DIR/filename
-        # If it's a multi file, it's at TEMP_DIR/DirectoryName/files...
-
-        # We need to find the "root" of the download in TEMP_DIR.
-        # aria2 "files" returns absolute paths if we gave absolute --dir.
-
-        # Heuristic: Take the first file's path.
-        first_file_path = files[0]['path']
-
-        # Check if it starts with TEMP_DIR
-        if not first_file_path.startswith(TEMP_DOWNLOAD_DIR):
-            log("warning", "move_to_drive", f"File path {first_file_path} is not in temp dir {TEMP_DOWNLOAD_DIR}", gid=gid)
-            # It might be already in Drive if the user messed with config?
-            # If so, just remove result.
-            s.aria2.removeDownloadResult(gid)
-            moving_gids.discard(gid)
-            return
-
-        # The relative path from TEMP_DIR
-        rel_path = os.path.relpath(first_file_path, TEMP_DOWNLOAD_DIR)
-
-        # The top-level component
-        top_component = rel_path.split(os.sep)[0]
-
-        source_path = os.path.join(TEMP_DOWNLOAD_DIR, top_component)
-        dest_path = os.path.join(FINAL_DOWNLOAD_DIR, top_component)
-
-        # Ensure Drive exists
-        if not os.path.exists(FINAL_DOWNLOAD_DIR):
+    def run(self):
+        log("info", "monitor", "Background monitor started")
+        while self.running:
             try:
-                os.makedirs(FINAL_DOWNLOAD_DIR, exist_ok=True)
+                self.check_downloads()
             except Exception as e:
-                log("error", "move_to_drive", f"Could not create destination dir: {e}", gid=gid)
-                moving_gids.discard(gid)
-                return
+                log("error", "monitor", f"Monitor loop failed: {e}")
+            time.sleep(2)
 
-        log("info", "move_to_drive", f"Moving {top_component} to Drive...", gid=gid)
-
-        # Handle Collision
-        if os.path.exists(dest_path):
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            dest_path = f"{dest_path}_{timestamp}"
-            log("warning", "move_to_drive", f"Destination exists, renaming to {os.path.basename(dest_path)}", gid=gid)
-
-        # Perform Move
+    def check_downloads(self):
+        # 1. Get completed tasks from Aria2
         try:
-            shutil.move(source_path, dest_path)
-            log("info", "move_to_drive", "Move completed successfully", gid=gid)
+            stopped = s.aria2.tellStopped(0, 100, ["gid", "status", "files", "totalLength"])
+        except Exception:
+            return
 
-            # Remove from Aria2 (Clean up the list)
-            s.aria2.removeDownloadResult(gid)
+        for task in stopped:
+            gid = task['gid']
+            status = task['status']
+
+            if status == 'complete':
+                # Check if already processing
+                with uploading_lock:
+                    if gid in uploading_tasks:
+                        continue
+
+                    # Mark as uploading
+                    files = task.get('files', [])
+                    if not files:
+                        continue
+
+                    # Determine source path (usually the first file's directory or file itself)
+                    # Aria2 structure: files[0]['path']
+                    source_path = files[0]['path']
+
+                    # If it's a directory download, aria2 returns files inside.
+                    # We need to find the root folder in TEMP_DOWNLOAD_DIR
+                    # Assumption: aria2 downloads to TEMP_DOWNLOAD_DIR/TaskName or TEMP_DOWNLOAD_DIR/File
+
+                    # Robust path finding:
+                    rel_path = os.path.relpath(source_path, TEMP_DOWNLOAD_DIR)
+                    root_name = rel_path.split(os.sep)[0]
+                    full_source_path = os.path.join(TEMP_DOWNLOAD_DIR, root_name)
+
+                    uploading_tasks[gid] = {
+                        "name": root_name,
+                        "size": task['totalLength'],
+                        "start_time": time.time()
+                    }
+
+                # Start upload in a separate thread to not block the monitor loop?
+                # Actually, moving might take time. Let's spawn a mover thread per task
+                # or just do it here if we want sequential safe moves.
+                # Sequential is safer for Colab I/O.
+
+                self.move_to_drive(gid, full_source_path, root_name)
+
+    def move_to_drive(self, gid, source, name):
+        log("info", "move", f"Starting move to Drive: {name}", gid=gid)
+        dest = os.path.join(FINAL_DRIVE_DIR, name)
+
+        try:
+            # Check if destination exists
+            if os.path.exists(dest):
+                log("warning", "move", f"Destination exists, renaming: {name}", gid=gid)
+                base, ext = os.path.splitext(name)
+                timestamp = int(time.time())
+                dest = os.path.join(FINAL_DRIVE_DIR, f"{base}_{timestamp}{ext}")
+
+            # Perform Move
+            shutil.move(source, dest)
+            log("info", "move", "Move completed successfully", gid=gid)
+
+            # Clean up from Aria2
+            try:
+                s.aria2.removeDownloadResult(gid)
+            except:
+                pass
 
         except Exception as e:
-            log("error", "move_to_drive", f"Move failed: {str(e)}", gid=gid)
-            # We don't remove result so user sees it? Or we leave it in temp?
-            # If we leave it, the monitor will try again.
-            # We should probably leave it and log error.
+            log("error", "move", f"Failed to move file: {e}", gid=gid)
+        finally:
+            with uploading_lock:
+                if gid in uploading_tasks:
+                    del uploading_tasks[gid]
 
-    except Exception as e:
-        log("error", "move_to_drive", f"Unexpected error: {str(e)}", gid=gid)
-    finally:
-        moving_gids.discard(gid)
-
-# Start Background Thread
-threading.Thread(target=monitor_downloads_loop, daemon=True).start()
-
+# Start Monitor
+monitor = DownloadMonitor()
+monitor.start()
 
 # --- Routes ---
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "ok", "service": "CloudLeecher-Backend"})
+    return jsonify({
+        "status": "ok",
+        "service": "CloudLeecher-Backend",
+        "auth_required": True
+    })
 
 @app.route('/api/logs', methods=['GET'])
 @require_api_key
@@ -234,15 +220,9 @@ def add_magnet():
     if not magnet_link:
         return jsonify({"error": "Magnet link is required"}), 400
     
-    # Check concurrent limits
     try:
-        active = s.aria2.tellActive(["gid"])
-        waiting = s.aria2.tellWaiting(0, 100, ["gid"])
-        if len(active) > 0 or len(waiting) > 0:
-            return jsonify({"error": "Queue full. Please wait."}), 429
-
-        gid = s.aria2.addUri([magnet_link], {"dir": TEMP_DOWNLOAD_DIR})
-        log("info", "add_magnet", "Magnet added", gid=gid)
+        gid = s.aria2.addUri([magnet_link])
+        log("info", "add_magnet", "Magnet link added", gid=gid)
         return jsonify({"status": "success", "gid": gid})
     except Exception as e:
         log("error", "add_magnet", str(e))
@@ -251,22 +231,15 @@ def add_magnet():
 @app.route('/api/download/file', methods=['POST'])
 @require_api_key
 def add_torrent_file():
+    data = request.json
+    b64_content = data.get('torrent')
+    if not b64_content:
+        return jsonify({"error": "Torrent content required"}), 400
+
     try:
-        data = request.json
-        b64_content = data.get('torrent')
-        if not b64_content:
-            return jsonify({"error": "Torrent content required"}), 400
-
-        active = s.aria2.tellActive(["gid"])
-        waiting = s.aria2.tellWaiting(0, 100, ["gid"])
-        if len(active) > 0 or len(waiting) > 0:
-            return jsonify({"error": "Queue full"}), 429
-
         raw_bytes = base64.b64decode(b64_content)
         binary_torrent = xmlrpc.client.Binary(raw_bytes)
-        
-        # CRITICAL: Force dir to TEMP_DOWNLOAD_DIR
-        gid = s.aria2.addTorrent(binary_torrent, [], {"dir": TEMP_DOWNLOAD_DIR})
+        gid = s.aria2.addTorrent(binary_torrent)
         log("info", "add_torrent_file", "Torrent file added", gid=gid)
         return jsonify({"status": "success", "gid": gid})
     except Exception as e:
@@ -277,27 +250,34 @@ def add_torrent_file():
 @require_api_key
 def get_status():
     try:
-        keys = ["gid", "status", "totalLength", "completedLength", "downloadSpeed", "files", "errorMessage", "errorCode", "numSeeders", "connections", "infoHash"]
+        # Standard Aria2 Status
+        keys = ["gid", "status", "totalLength", "completedLength", "downloadSpeed", "uploadSpeed", "dir", "files", "errorMessage", "errorCode", "numSeeders", "connections", "infoHash", "bittorrent", "followedBy", "following"]
         
         active = s.aria2.tellActive(keys)
         waiting = s.aria2.tellWaiting(0, 100, keys)
         stopped = s.aria2.tellStopped(0, 100, keys)
         
-        # Inject "moving" status info if needed
-        # (The monitor removes them from aria2 once moved, but while moving they are "complete" in aria2)
-        # We can verify if GID is in moving_gids
+        # Inject Uploading Tasks
+        # We present them as "active" but with a custom status in the frontend if possible,
+        # or we return a separate list. Returning a separate list is cleaner, but frontend expects specific structure.
+        # Let's inject them into 'active' with a special status 'uploading'
         
-        for task in stopped:
-            if task['gid'] in moving_gids:
-                task['status'] = 'moving' # Custom status for frontend!
-                # We need to make sure frontend handles 'moving' or we map it to something else?
-                # If frontend doesn't know 'moving', it might break.
-                # Let's check frontend code again?
-                # Frontend just displays status string usually.
-                # But logic might depend on 'active'/'complete'.
-                # For safety, we can append to name?
-                # Or just let it be 'complete' but add a flag.
-                pass
+        with uploading_lock:
+            for gid, info in uploading_tasks.items():
+                # Fake an aria2 task object
+                upload_task = {
+                    "gid": gid,
+                    "status": "uploading", # Custom status
+                    "totalLength": str(info['size']),
+                    "completedLength": str(info['size']), # It's done downloading
+                    "downloadSpeed": "0",
+                    "uploadSpeed": "0",
+                    "files": [{"path": info['name']}],
+                    "dir": FINAL_DRIVE_DIR
+                }
+                # Filter out the stopped task from aria2 if it's still there
+                stopped = [t for t in stopped if t['gid'] != gid]
+                active.append(upload_task)
 
         return jsonify({
             "active": active,
@@ -305,6 +285,7 @@ def get_status():
             "stopped": stopped
         })
     except Exception as e:
+        log("error", "get_status", str(e))
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/control/pause', methods=['POST'])
@@ -335,18 +316,21 @@ def remove_download():
         s.aria2.forceRemove(gid)
         return jsonify({"status": "removed", "gid": gid})
     except Exception as e:
-        # If not found, success
+        # If not found, it's fine
         return jsonify({"status": "removed", "gid": gid})
 
 @app.route('/api/drive/info', methods=['GET'])
 @require_api_key
 def drive_info():
     try:
-        # Check actual drive path
-        path = FINAL_DOWNLOAD_DIR if os.path.exists(FINAL_DOWNLOAD_DIR) else DRIVE_MOUNT_PATH
-        total, used, free = shutil.disk_usage(path)
-        return jsonify({"total": total, "used": used, "free": free})
-    except:
+        # Check Final Drive Destination
+        total, used, free = shutil.disk_usage(FINAL_DRIVE_DIR)
+        return jsonify({
+            "total": total,
+            "used": used,
+            "free": free
+        })
+    except Exception:
         return jsonify({"total": 0, "used": 0, "free": 0})
 
 @app.route('/api/cleanup', methods=['POST'])
@@ -354,15 +338,14 @@ def drive_info():
 def cleanup_all():
     try:
         s.aria2.purgeDownloadResult()
+        # Also clear uploading tasks?
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    log("info", "startup", "CloudLeecher Backend starting...")
-    if not API_KEY:
-        log("warning", "startup", "NO API KEY SET! Security is disabled.")
-    else:
-        log("info", "startup", "API Key protection enabled.")
-
+    print(f"\n{'='*50}")
+    print(f"🔑 API KEY: {API_KEY}")
+    print(f"{'='*50}\n")
+    log("info", "startup", f"Backend starting with API Key protection")
     app.run(port=5000)
