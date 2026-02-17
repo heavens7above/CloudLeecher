@@ -20,6 +20,7 @@ export function AppProvider({ children }) {
     // --- Refs for Locks & Ghost Prevention ---
     const interactionInProgress = useRef(false); // Lock for connection attempts
     const ignoredTaskIds = useRef(new Set()); // Blacklist for deleted tasks (Ghost Killer)
+    const lastLoggedBackendGids = useRef([]); // Track previous GIDs to reduce log spam
 
     // Update Axios and LocalStorage when URL or API Key changes
     useEffect(() => {
