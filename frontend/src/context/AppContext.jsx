@@ -37,6 +37,13 @@ export function AppProvider({ children }) {
         if (apiUrl) checkConnection();
     }, [apiKey]);
 
+    // Update Axios and LocalStorage when API Key changes
+    useEffect(() => {
+        localStorage.setItem('CL_API_KEY', apiKey);
+        setApiKey(apiKey);
+        if (apiUrl && apiKey) checkConnection();
+    }, [apiKey]);
+
     // Persist Tasks when they change
     useEffect(() => {
         localStorage.setItem('CL_TASKS', JSON.stringify(tasks));
@@ -95,10 +102,15 @@ export function AppProvider({ children }) {
             }
         }
 
-        if (!success) {
-            console.error('Connection failed after retries:', lastError);
-            if (isConnected) addToast("Connection Lost. Check your backend.", "error");
-            setIsConnected(false);
+        if (!success && !isConnected) {
+             // Only toast if we weren't already connected to avoid spam on re-connect attempts
+             // Actually checkConnection is usually manual or config change triggered.
+             if (lastError?.response?.status !== 401 && lastError?.response?.status !== 403) {
+                 // Don't show generic error if we already showed Auth error
+                 console.error('Connection failed after retries:', lastError);
+                 addToast("Connection Lost. Check your backend.", "error");
+             }
+             setIsConnected(false);
         }
 
         interactionInProgress.current = false; // Release lock

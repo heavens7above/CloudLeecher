@@ -221,6 +221,8 @@ def add_magnet():
         return jsonify({"error": "Magnet link is required"}), 400
     
     try:
+        # Note: DOWNLOAD_DIR is set in aria2c startup args, but addUri inherits it.
+        # We don't need to specify dir here unless we want to override.
         gid = s.aria2.addUri([magnet_link])
         log("info", "add_magnet", "Magnet link added", gid=gid)
         return jsonify({"status": "success", "gid": gid})
