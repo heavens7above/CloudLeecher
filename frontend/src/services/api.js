@@ -22,6 +22,13 @@ export const setApiUrl = (url, apiKey = null) => {
     }
 };
 
+export const setApiKey = (key) => {
+    if (key) {
+        api.defaults.headers.common['x-api-key'] = key;
+    } else {
+        delete api.defaults.headers.common['x-api-key'];
+    }
+};
 // Deprecated but kept for compatibility if needed (wraps new config)
 export const setApiUrl = (url) => setApiConfig(url, null);
 

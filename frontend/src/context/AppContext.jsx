@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { setApiUrl, setApiKey, TorrentAPI } from '../services/api';
 import { setApiConfig, TorrentAPI } from '../services/api';
 import { useToast } from './ToastContext';
 
@@ -8,6 +9,7 @@ export function AppProvider({ children }) {
     const { addToast } = useToast();
     // --- Persistent Settings ---
     const [apiUrl, setApiUrlState] = useState(() => localStorage.getItem('CL_API_URL') || '');
+    const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('CL_API_KEY') || '');
     const [apiKey, setApiKey] = useState(() => localStorage.getItem('CL_API_KEY') || '');
     const [tasks, setTasks] = useState(() => JSON.parse(localStorage.getItem('CL_TASKS') || '[]'));
 
@@ -25,6 +27,9 @@ export function AppProvider({ children }) {
     // Update Axios and LocalStorage when URL or API Key changes
     useEffect(() => {
         localStorage.setItem('CL_API_URL', apiUrl);
+        setApiUrl(apiUrl);
+        if (apiUrl && apiKey) checkConnection();
+    }, [apiUrl]);
         localStorage.setItem('CL_API_KEY', apiKey);
         setApiUrl(apiUrl, apiKey);
         if (apiUrl) checkConnection();
@@ -35,6 +40,13 @@ export function AppProvider({ children }) {
         localStorage.setItem('CL_API_KEY', apiKey);
         setApiKey(apiKey);
         if (apiUrl) checkConnection();
+    }, [apiKey]);
+
+    // Update Axios and LocalStorage when API Key changes
+    useEffect(() => {
+        localStorage.setItem('CL_API_KEY', apiKey);
+        setApiKey(apiKey);
+        if (apiUrl && apiKey) checkConnection();
     }, [apiKey]);
 
     // Update Axios and LocalStorage when API Key changes
@@ -119,6 +131,7 @@ export function AppProvider({ children }) {
 
     const disconnect = () => {
         setApiUrlState('');
+        setApiKeyState('');
         setApiKey('');
         setIsConnected(false);
         addToast("Disconnected from Backend", "info");
@@ -415,6 +428,8 @@ export function AppProvider({ children }) {
 
     return (
         <AppContext.Provider value={{
+            apiUrl, setApiUrl: setApiUrlState,
+            apiKey, setApiKey: setApiKeyState,
             apiUrl, apiKey, setApiUrl: setApiUrlState, setApiKey,
             isConnected, checkConnection, disconnect,
             tasks, addMagnet, addTorrentFile, removeTask, pauseTask, resumeTask, clearHistory,
