@@ -157,18 +157,8 @@ export function AppProvider({ children }) {
         updateTasksFromBackend(statusRes.data);
     };
 
-    const [backendGids, setBackendGids] = useState({ active: [], waiting: [], stopped: [] });
-
     const updateTasksFromBackend = (backendData) => {
-        // DEBUG: See what the backend is actually sending
         const { active, waiting, stopped } = backendData;
-
-        // Expose debug info
-        setBackendGids({
-            active: active.map(t => t.gid),
-            waiting: waiting.map(t => t.gid),
-            stopped: stopped.map(t => t.gid)
-        });
 
         // Create a map of all backend tasks for quick lookup
         const backendTasksMap = new Map();
@@ -230,7 +220,7 @@ export function AppProvider({ children }) {
                         errorCode: backendTask.errorCode || null,
                         seeds: parseInt(backendTask.numSeeders) || 0,
                         peers: parseInt(backendTask.connections) || 0,
-                        infoHash: backendTask.infoHash || null,
+                        infoHash: backendTask.infoHash || localTask.infoHash || null,
                         timestamp: new Date().toISOString()
                     };
                     backendTasksMap.delete(localTask.gid);
@@ -433,7 +423,7 @@ export function AppProvider({ children }) {
             apiUrl, apiKey, setApiUrl: setApiUrlState, setApiKey,
             isConnected, checkConnection, disconnect,
             tasks, addMagnet, addTorrentFile, removeTask, pauseTask, resumeTask, clearHistory,
-            driveInfo, lastUpdated, backendGids, logs
+            driveInfo, lastUpdated, logs
         }}>
             {children}
         </AppContext.Provider>

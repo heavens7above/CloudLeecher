@@ -43,43 +43,6 @@ export function TaskList() {
     );
 }
 
-function DebugPanel({ visibleTasks }) {
-    const { lastUpdated, tasks, backendGids } = useApp();
-    const [isOpen, setIsOpen] = React.useState(false);
-
-    return (
-        <div className="mt-8 border-t border-white/10 pt-4">
-            <button
-                onClick={() => setIsOpen(!isOpen)}
-                className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-2"
-            >
-                {isOpen ? 'Hide Debug Info' : 'Show Debug Info'}
-            </button>
-
-            {isOpen && (
-                <div className="mt-4 p-4 bg-black/50 rounded text-xs font-mono text-gray-400 overflow-x-auto space-y-2">
-                    <p>Last Updated: {lastUpdated ? lastUpdated.toLocaleTimeString() : 'Never'}</p>
-                    <p>Total Local Tasks: {tasks.length}</p>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <strong className="text-white">Local GIDs:</strong>
-                            <pre className="mt-1 text-emerald-400">
-                                {JSON.stringify(tasks.map(t => ({ gid: t.gid, status: t.status })), null, 2)}
-                            </pre>
-                        </div>
-                        <div>
-                            <strong className="text-white">Backend GIDs:</strong>
-                            <pre className="mt-1 text-blue-400">
-                                {JSON.stringify(backendGids, null, 2)}
-                            </pre>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-}
-
 function TaskCard({ task }) {
     const { pauseTask, resumeTask, removeTask } = useApp();
 
