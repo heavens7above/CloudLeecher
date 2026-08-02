@@ -89,7 +89,7 @@ function TaskCard({ task }) {
             case 'complete': return 'text-gray-400'; // Dimmed for completed
             case 'error': return 'text-white underline decoration-wavy decoration-white/30'; // Underlined for error
             case 'paused': return 'text-gray-500'; // Very dimmed for paused
-            case 'removed': return 'text-red-900 line-through opacity-50'; // DEBUG: Removed tasks
+            case 'removed': return 'text-red-400 line-through opacity-50'; // DEBUG: Removed tasks
             default: return 'text-gray-600';
         }
     };
@@ -174,14 +174,16 @@ function TaskCard({ task }) {
                             <Play size={16} />
                         </Button>
                     )}
-                    <Button
-                        variant="danger"
-                        size="icon"
-                        onClick={() => removeTask(task.gid)}
-                        className="min-w-[44px] min-h-[44px] sm:min-w-[36px] sm:min-h-[36px]"
-                    >
-                        <Trash2 size={16} />
-                    </Button>
+                    {task.status !== 'removed' && (
+                        <Button
+                            variant="danger"
+                            size="icon"
+                            onClick={() => removeTask(task.gid)}
+                            className="min-w-[44px] min-h-[44px] sm:min-w-[36px] sm:min-h-[36px]"
+                        >
+                            <Trash2 size={16} />
+                        </Button>
+                    )}
                 </div>
             </CardContent>
         </Card>
